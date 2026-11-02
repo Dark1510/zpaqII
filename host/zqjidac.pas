@@ -1317,7 +1317,10 @@ begin
             if c >= 0 then
             begin
               if c = o1[c1] then
-                h := (h + Cardinal(c) + 1) * 314159265
+              begin
+                h := (h + Cardinal(c) + 1) * 314159265;
+                Inc(hits);
+              end
               else
                 h := (h + Cardinal(c) + 1) * 271828182;
               o1[c1] := Byte(c);

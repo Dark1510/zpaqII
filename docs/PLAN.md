@@ -193,6 +193,10 @@ let the oracle (upstream) validate each piece as early as possible.
   port with upstream on `list` (file sets) and `extract` (success and file set).
   204 cases: no crashes, no list differences. Exit-code differences on corrupt
   archives are tracked as divergences in `docs/DEVIATIONS.md`.
+- **Status (matrix):** `tests/matrix.sh` runs 102 checks: levels 0–5 × four
+  corpus files, ten explicit methods, four streaming methods, directory trees,
+  multi-version updates, `-until` rollback and deletions; every add is compared
+  bit-for-bit and every archive is extracted in both directions. All green.
 
 ---
 

@@ -147,6 +147,9 @@ $(BUILD)/zpaqii: $(HOST_SRC) $(BUILD)/libzqcore.a
 
 host: $(BUILD)/zpaqii
 
+matrix: $(BUILD)/zpaqii $(BUILD)/faketime.so
+	@tests/matrix.sh $(BUILD)
+
 test-e6a: $(BUILD)/zpaqii
 	@python3 tests/fuzz.py $(UPSTREAM)/zpaq $(BUILD)/zpaqii $(BUILD)/fuzzwork 60
 
