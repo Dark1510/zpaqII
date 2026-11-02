@@ -28,7 +28,8 @@ struct MemWriter : public libzpaq::Writer {
 struct Case {
   std::string config;
   int args[9];
-  bool hp;  // incluye PCOMP
+  bool hp;   // incluye PCOMP
+  bool runp; // ejecutar PCOMP (solo programas que terminan con bytes arbitrarios)
 };
 
 static void hex(const char *p, int n, std::string &out) {
@@ -90,6 +91,7 @@ int main(int argc, char **argv) {
     memset(c.args, 0, sizeof(c.args));
     c.config = libzpaq::makeConfig(methods[i], c.args);
     c.hp = c.config.find("pcomp") != std::string::npos;
+    c.runp = false;
     cases.push_back(c);
   }
 
@@ -104,7 +106,7 @@ int main(int argc, char **argv) {
         "b= 3 *b= 11 a=*b *b<>a *b++ *b-- *b! *b=0\n"
         "c= 4 *c= 12 a=*c *c<>a *c++ *c-- *c! *c=0\n"
         "d= 5 *d= 13 a=*d *d<>a *d++ *d-- *d! *d=0\n"
-        "a= 255 r= 7 a=r 7\n"
+        "a= 255 r=a 7 a=r 7\n"
         "a= 1 b= 2 a+=b a+=*b a+= 3 a-=b a-=*b a-= 2\n"
         "a*=b a*=*b a*= 3 a/=b a/=*b a/= 2\n"
         "a%=b a%=*b a%= 7 a&=b a&=*b a&= 127\n"
@@ -115,46 +117,49 @@ int main(int argc, char **argv) {
         "a= 3 b= 4 a==b ifnot a= 3 endif\n"
         "a= 1 b= 2 a<b if a= 9 endif a>b if a= 8 endif\n"
         "a= 5 a== 5 if a==*b if a> 4 if a= 77 endif endif endif\n"
-        "a= 1 b= 0 do a++ b++ a==b until\n"
-        "a= 0 b= 0 do b++ a++ a== 3 while\n"
-        "a= 0 b= 0 do b++ a++ a== 4 forever\n"
+        "a= 0 b= 0 do a++ b++ a== 3 until\n"
+        "a= 0 b= 0 do a++ b++ a< 3 while\n"
+        "a= 0 do a++ a< 9 while\n"
         "b= 0 c= 0 d= 0 a= 42 hash a= 42 hashd\n"
         "a= 0 b= 1 a=*b hash a=*b hashd\n"
         "a= 3 ifl a= 1 elsel a= 2 endif\n"
         "a= 0 ifnotl a= 5 elsel a= 6 endif\n"
         "d= 0 *d=a d= 1 *d=b d= 2 *d=c d= 3 *d=d d= 4 *d= 99\n"
         "a= 1 b= 2 c= 3 d= 4 a= 0\n"
+        "a= 0 do a++ a== 7 if a= 77 halt endif forever\n"
         "end\n";
     Case c;
     memset(c.args, 0, sizeof(c.args));
     c.config = p;
     c.hp = false;
+    c.runp = false;
     cases.push_back(c);
   }
 
   // Config con PCOMP sintetico (out, saltos y salida).
   {
     std::string p =
-        "comp 9 16 9 16 0 hcomp a= 1 end\n"
+        "comp 9 16 9 16 0 hcomp a= 1 halt\n"
         "pcomp test ;\n"
         "a= 0 b= 0 c= 0 d= 0\n"
         "a=*b out b++ a=*b out b++ a=*b out b++\n"
         "a> 128 if a= 1 else a= 2 endif out\n"
         "a= 1 b= 0 do b++ a<<= 1 a> 200 until\n"
         "a+= 65 out a+= 66 out\n"
-        "d= 0 h(d)= 1234 a=*d out\n"
+        "d= 0 *d= 123 a=*d out\n"
         "halt\n"
         "end\n";
     Case c;
     memset(c.args, 0, sizeof(c.args));
     c.config = p;
     c.hp = true;
+    c.runp = true;
     cases.push_back(c);
   }
 
   // Manifiesto + resultados
   for (size_t i = 0; i < cases.size(); ++i) {
-    fprintf(mf, "CASE %zu %d\n", i, cases[i].hp ? 1 : 0);
+    fprintf(mf, "CASE %zu %d\n", i, (cases[i].hp ? 1 : 0) | (cases[i].runp ? 2 : 0));
     fprintf(mf, "CONFIG %s\n", escape(cases[i].config).c_str());
     fprintf(mf, "ARGS");
     for (int j = 0; j < 9; ++j) fprintf(mf, " %d", cases[i].args[j]);
@@ -217,7 +222,7 @@ int main(int argc, char **argv) {
 
     // Ejecucion PCOMP
     lcg = 987654321u;
-    if (pz.hend > pz.hbegin) {
+    if (cases[i].runp && pz.hend > pz.hbegin) {
       MemWriter out;
       pz.output = &out;
       pz.initp();
@@ -228,6 +233,8 @@ int main(int argc, char **argv) {
       h.write(out.s.data(), (int)out.s.size());
       fprintf(rf, "POUT %d %s\n", (int)out.s.size(), sha1str(h).c_str());
     }
+    fflush(mf);
+    fflush(rf);
   }
 
   fclose(mf);

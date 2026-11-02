@@ -13,7 +13,7 @@ AR       ?= ar
 FPC      ?= fpc
 
 CFLAGS   ?= -std=c11 -O3 -Wall -Wextra -Wshadow -Wpointer-arith -Wwrite-strings
-CPPFLAGS += -Iinclude
+CPPFLAGS += -Iinclude -Isrc/core
 LDFLAGS  ?=
 
 ifeq ($(NOJIT),1)
@@ -21,12 +21,12 @@ CPPFLAGS += -DZQ_NOJIT
 endif
 
 ifeq ($(DEBUG),1)
-CFLAGS := -std=c11 -O0 -g -fsanitize=address,undefined -Wall -Wextra -Wshadow -Iinclude
+CFLAGS := -std=c11 -O0 -g -fsanitize=address,undefined -Wall -Wextra -Wshadow -Iinclude -Isrc/core
 LDFLAGS += -fsanitize=address,undefined
 endif
 
 UPSTREAM ?= /mnt/IA_LAB/agentes/zpaqII/upstream-zpaq
-BUILD    := build
+BUILD    := build$(if $(DEBUG),-debug,)$(if $(NOJIT),-nojit,)
 
 CORE_SRC := $(wildcard src/core/*.c)
 CORE_OBJ := $(patsubst src/core/%.c,$(BUILD)/obj/%.o,$(CORE_SRC))
@@ -52,7 +52,7 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h
 
 # ---------------- tests ----------------
 
-test: test-e1
+test: test-e1 test-e2
 	@echo "== E1 (hash/AES/scrypt): OK =="
 
 test-e1: $(BUILD)/vectors_e1 $(BUILD)/e1_oracle
@@ -68,8 +68,21 @@ $(BUILD)/e1_oracle: tools/oracle/e1_dump.cpp
 	@mkdir -p $(BUILD)
 	$(CXX) -O2 -Dunix -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
 
+test-e2: $(BUILD)/zpaql_dump $(BUILD)/e2_oracle
+	@$(BUILD)/e2_oracle $(BUILD)/e2_manifest.txt $(BUILD)/e2_upstream.txt
+	@$(BUILD)/zpaql_dump $(BUILD)/e2_manifest.txt $(BUILD)/e2_core.txt
+	@diff -u $(BUILD)/e2_upstream.txt $(BUILD)/e2_core.txt && echo "E2: identico al oraculo ($$(grep -c '^RESULT' $(BUILD)/e2_core.txt) configs)"
+
+$(BUILD)/zpaql_dump: tests/unit/zpaql_dump.c $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
+
+$(BUILD)/e2_oracle: tools/oracle/e2_dump.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) -O2 -Dunix -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
+
 oracle:
 	$(MAKE) -C $(UPSTREAM) zpaq
 
 clean:
-	rm -rf $(BUILD)
+	rm -rf build build-debug build-nojit build-debug-nojit

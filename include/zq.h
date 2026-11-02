@@ -6,8 +6,8 @@
  * Reglas: tipos con ancho fijo, sin UB no documentado, mismos mensajes de
  * error que upstream, ningun acceso a archivos (todo pasa por callbacks).
  */
-#ifndef ZQ_H
-#define ZQ_H 1
+#ifndef ZPAQII_ZQ_H
+#define ZPAQII_ZQ_H 1
 
 #include <setjmp.h>
 #include <stddef.h>
@@ -195,4 +195,4 @@ void zq_random(char *buf, int n);
 }
 #endif
 
-#endif /* ZQ_H */
+#endif /* ZPAQII_ZQ_H */

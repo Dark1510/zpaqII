@@ -10,9 +10,9 @@ con compatibilidad **bit-exacta** con el original como criterio de aceptación.
 
 | etapa | contenido | estado |
 |---|---|---|
-| E0 | infra, oráculo (upstream compilado), corpus | en curso |
+| E0 | infra, oráculo (upstream compilado), corpus | ✅ |
 | E1 | SHA-1, SHA-256, AES-256-CTR, scrypt/stretchKey, random | ✅ idéntico al oráculo (357 casos) |
-| E2 | VM ZPAQL + compilador de configs | en curso |
+| E2 | VM ZPAQL + compilador de configs | ✅ idéntico (bytecode y trazas); JIT pendiente |
 | E3 | predictor, coder aritmético | pendiente |
 | E4 | contenedor, postprocesadores, LZ77/BWT, makeConfig | pendiente |
 | E5 | archiver JIDAC en Pascal | pendiente |
