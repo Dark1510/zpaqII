@@ -63,12 +63,38 @@ type
     ptr: array of Cardinal;
   end;
 
+  { ---- check: a stream that hashes instead of writing --------------------
+    The extractor tells its output stream where each fragment goes and then
+    writes it; here the seek is only ever to the current position (the
+    consumer takes blocks in order), so the digests come out in file order. }
+
+  THashStream = class(TStream)
+  private
+    fCrc: TZqCrc32;
+    fXxh: TZqXxh64;
+    fSha: TZqSha256;
+    fSize, fPos: Int64;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    function Read(var Buffer; Count: LongInt): LongInt; override;
+    function Write(const Buffer; Count: LongInt): LongInt; override;
+    function Seek(const Offset: Int64; Origin: TSeekOrigin): Int64; override;
+    function DigestLine: string;
+    property Crc: TZqCrc32 read fCrc;
+    property Xxh: TZqXxh64 read fXxh;
+    property Sha: TZqSha256 read fSha;
+    property Size: Int64 read fSize;
+  end;
+
   TJidac = class
   private
     function GetDT(const fn: string): TDT;
     function LoadBlock(const arcName, password: string; nb: Integer;
                        osb: TZqBuf; out bad: Boolean): Boolean;
     procedure ScanInto(edt: TStringList; const name: string);
+    procedure ParseHashList(ms: TMemoryStream);
+    procedure CheckOne(const name: string; hs: THashStream);
   public
     fBlockMem: Double;       { memory used by the last block decompressed }
     fBlockFiles: array of array of Integer;
@@ -97,6 +123,11 @@ type
     threads: Integer;        { -tN: compression threads, 0 = one per CPU }
     turbo: Integer;          { -turbo N: fragmenter threads, 0 = as -t, <0 = off }
     hashList: Boolean;       { -hash: store the digest list inside the archive }
+    checkMode: Boolean;      { check: hash the output instead of writing it }
+    checkPass: Integer;      { 1 = read VFILE-hash.txt, 2 = verify the files }
+    checkNames: TStringList; { file names from VFILE-hash.txt, in order }
+    checkVals: TStringList;  { the matching "xxh crc sha size" lines }
+    checkGood, checkBad, checkMissing: Integer;
     indexName: string;       { -index F: index archive used by add/extract }
     dhsize: Int64;           { total size of D blocks according to H blocks }
     dcsize: Int64;           { total size of D blocks according to C blocks }
@@ -784,6 +815,12 @@ begin
   cmdDate := 0;
   turbo := 0;      { -turbo: 0 = as -t, < 0 = off }
   hashList := False;
+  checkMode := False;
+  checkPass := 0;
+  checkNames := TStringList.Create;
+  checkNames.Sorted := False;
+  checkNames.CaseSensitive := True;
+  checkVals := TStringList.Create;
   SetLength(ht, 1);   { element 0 is not used, like upstream }
   FillChar(ht[0], SizeOf(THT), 0);
   SetLength(blocks, 0);
@@ -1935,7 +1972,10 @@ begin
       if (dtr.date = 0) or (dt[i] = '') then Continue;
       fn := Rename(dt[i]);
       isdir := dt[i][Length(dt[i])] = '/';
-      if (not testOnly) and force and (not isdir) and Equal(dtr, fn) then
+      { check always decompresses: comparing with a local file says nothing
+        about the archive }
+      if (not testOnly) and force and (not checkMode) and (not isdir) and
+         Equal(dtr, fn) then
       begin
         if summary <= 0 then WriteLn('= ', fn);
         CloseFileAttrs(fn, dtr.date, dtr.attr);
@@ -2123,12 +2163,17 @@ begin
             end;
             if dtr.data = 0 then
             begin
-              if summary <= 0 then
+              if (summary <= 0) and (not checkMode) then
               begin
                 PrintProgress(totalSize, totalDone, summary);
                 WriteLn('> ', Rename(dt[i]));
               end;
-              if not testOnly then
+              if checkMode then
+              begin
+                if checkPass = 1 then curFile := TMemoryStream.Create
+                else curFile := THashStream.Create;
+              end
+              else if not testOnly then
               begin
                 MakePath(Rename(dt[i]));
                 curFile := OpenOut(Rename(dt[i]), True);
@@ -2140,7 +2185,7 @@ begin
                 end;
               end;
             end
-            else if not testOnly then
+            else if (not testOnly) and (not checkMode) then
             begin
               curFile := OpenOut(Rename(dt[i]), False);
               if curFile = nil then
@@ -2172,11 +2217,16 @@ begin
         begin
           if curFile <> nil then
           begin
+            if checkMode then
+            begin
+              if checkPass = 1 then ParseHashList(TMemoryStream(curFile))
+              else CheckOne(Rename(dt[i]), THashStream(curFile));
+            end;
             curFile.Free;
             curFile := nil;
           end;
           curIdx := -1;
-          if not testOnly then
+          if (not testOnly) and (not checkMode) then
             CloseFileAttrs(Rename(dt[i]), dtr.date, dtr.attr);
         end;
       end;
@@ -2336,6 +2386,142 @@ begin
     c := AnsiChar(x and 255);
     zq_buf_write(b, @c, 1);
     x := x shr 8;
+  end;
+end;
+
+constructor THashStream.Create;
+begin
+  inherited Create;
+  zq_crc32_init(fCrc);
+  zq_xxh64_init(fXxh, 0);
+  fSha := zq_sha256_new;
+  fSize := 0;
+  fPos := 0;
+end;
+
+destructor THashStream.Destroy;
+begin
+  zq_sha256_free(fSha);
+  inherited Destroy;
+end;
+
+function THashStream.Read(var Buffer; Count: LongInt): LongInt;
+begin
+  Result := 0;
+end;
+
+function THashStream.Write(const Buffer; Count: LongInt): LongInt;
+begin
+  if Count > 0 then
+  begin
+    zq_crc32_write(fCrc, @Buffer, Count);
+    zq_xxh64_write(fXxh, @Buffer, Count);
+    zq_sha256_write(fSha, @Buffer, Count);
+    Inc(fSize, Count);
+    Inc(fPos, Count);
+  end;
+  Result := Count;
+end;
+
+{ The extractor only ever seeks to where the stream already is (blocks are
+  consumed in order), so anything else is a bug worth reporting as -1. }
+function THashStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
+begin
+  case Origin of
+    soBeginning: Result := Offset;
+    soCurrent: Result := fPos + Offset;
+    soEnd: Result := fSize + Offset;
+  else
+    Result := -1;
+  end;
+  if Result <> fPos then Result := -1;
+end;
+
+{ "<xxh64> <crc32> <sha256>" of everything written, ready to compare }
+function THashStream.DigestLine: string;
+var
+  b: Integer;
+  h: PAnsiChar;
+begin
+  Result := Format('%.16x %.8x ',
+                   [zq_xxh64_result(@fXxh), zq_crc32_result(@fCrc)]);
+  h := zq_sha256_result(fSha);
+  for b := 0 to 31 do
+    Result := Result + LowerCase(IntToHex(Ord(h[b]), 2));
+end;
+
+{ the n-th space of s (0 if there is none) }
+function NthSpace(const s: string; n: Integer): Integer;
+var
+  i, c: Integer;
+begin
+  c := 0;
+  for i := 1 to Length(s) do
+    if s[i] = ' ' then
+    begin
+      Inc(c);
+      if c = n then Exit(i);
+    end;
+  Result := 0;
+end;
+
+procedure TJidac.ParseHashList(ms: TMemoryStream);
+var
+  raw, ln, vals, nm: string;
+  lines: TStringList;
+  i, p: Integer;
+begin
+  SetLength(raw, ms.Size);
+  if ms.Size > 0 then
+  begin
+    ms.Position := 0;
+    ms.Read(raw[1], Length(raw));
+  end;
+  lines := TStringList.Create;
+  try
+    lines.Text := raw;
+    for i := 1 to lines.Count - 1 do  { line 0 is the version header }
+    begin
+      ln := lines[i];
+      if ln = '' then Continue;
+      p := NthSpace(ln, 4);
+      if p = 0 then Continue;
+      vals := Copy(ln, 1, p - 1);
+      nm := Copy(ln, p + 1, MaxInt);
+      checkNames.Add(nm);
+      checkVals.Add(vals);
+    end;
+  finally
+    lines.Free;
+  end;
+end;
+
+procedure TJidac.CheckOne(const name: string; hs: THashStream);
+var
+  idx: Integer;
+  mine, exp: string;
+begin
+  if Pos('VFILE-hash', name) = 1 then Exit;   { the list itself is not listed }
+  mine := hs.DigestLine + ' ' + IntToStr(hs.Size);
+  idx := checkNames.IndexOf(name);
+  if idx < 0 then
+  begin
+    { the list describes the files of one transaction: an archive updated
+      without -hash has files it does not mention, and that is not damage }
+    WriteLn('? ', name, ': not in the digest list');
+    Inc(checkMissing);
+    Exit;
+  end;
+  exp := checkVals[idx];
+  if mine = exp then
+  begin
+    WriteLn('ok ', name);
+    Inc(checkGood);
+  end
+  else
+  begin
+    WriteLn('FAIL ', name);
+    Inc(checkBad);
   end;
 end;
 

@@ -556,6 +556,66 @@ begin
   Result := 0;
 end;
 
+{ check: verify every file of the archive against the digest list it carries
+  (VFILE-hash.txt, written by "add -hash").  Nothing is written to disk: the
+  extractor's output stream hashes instead.  Two passes, because the list has
+  to be read before the files it describes can be verified. }
+function RunCheck(const archive, key: string; ver: Int64;
+                  threads: Integer): Integer;
+var
+  j: TJidac;
+  errs: Integer;
+  nfiles: Cardinal;
+  names, vals: TStringList;
+begin
+  Result := 0;
+  names := TStringList.Create;
+  vals := TStringList.Create;
+  try
+    j := TJidac.Create(archive, key, ver);
+    try
+      j.threads := threads;
+      j.summary := 1;
+      j.checkMode := True;
+      j.checkPass := 1;
+      j.files.Add('VFILE-hash.txt');
+      j.ReadArchive(errs, nfiles);
+      j.Extract(True, False);   { force: nothing is written anyway }
+      names.Assign(j.checkNames);
+      vals.Assign(j.checkVals);
+    finally
+      j.Free;
+    end;
+    if names.Count = 0 then
+    begin
+      WriteLn(StdErr, 'check: no digest list in the archive (write one with -hash)');
+      Exit(2);
+    end;
+    j := TJidac.Create(archive, key, ver);
+    try
+      j.threads := threads;
+      j.summary := 1;
+      j.checkMode := True;
+      j.checkPass := 2;
+      j.checkNames.Assign(names);
+      j.checkVals.Assign(vals);
+      j.ReadArchive(errs, nfiles);
+      j.Extract(True, False);
+      WriteLn(j.checkGood, ' ok, ', j.checkBad, ' failed, ',
+              j.checkMissing, ' not in the list, ', names.Count,
+              ' in the list');
+      { only a real mismatch is a failure: files the list does not mention
+        come from an update made without -hash }
+      if j.checkBad > 0 then Result := 1;
+    finally
+      j.Free;
+    end;
+  finally
+    names.Free;
+    vals.Free;
+  end;
+end;
+
 function RunExtract(j: TJidac; listOnly, force: Boolean): Integer;
 var
   errors: Integer;
@@ -909,7 +969,7 @@ begin
       resolved (upstream calls usage() from the argument loop). }
     if (cmd <> 'add') and (cmd <> 'a') and (cmd <> 'extract') and
        (cmd <> 'x') and (cmd <> 'list') and (cmd <> 'l') and
-       (cmd <> 'convert') and (cmd <> 'c') then
+       (cmd <> 'convert') and (cmd <> 'c') and (cmd <> 'check') then
     begin
       BadCommandLine('unknown command: ' + cmd);
     end;
@@ -965,6 +1025,8 @@ begin
         Finish(rc);
       end;
     end
+    else if (cmd = 'check') then
+      Finish(RunCheck(archive, key, untilVer, GThreads))
     else if (cmd = 'extract') or (cmd = 'x') or
             (cmd = 'list') or (cmd = 'l') then
     begin

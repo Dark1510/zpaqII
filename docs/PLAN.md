@@ -954,6 +954,32 @@ Verified independently: for a 2-file archive, the `crc32`, `sha256` and
 file, both programs extract the same tree, and the list has one line per file
 (131 checks).
 
-Pending for 2.3: the `check` command that verifies an archive against that
-list without writing the files to disk (a stream that hashes instead of
-writing, plugged where the extractor opens the output file).
+## 2.3c: `check` — verify the archive against the list
+
+`zpaqii check archive` decompresses everything and compares each file with the
+digests in `VFILE-hash.txt`, without creating any file on disk.
+
+The trick is `THashStream` (a `TStream` that updates CRC-32, XXH64 and SHA-256
+in `Write` and discards the data), plugged where the extractor opens its output
+file.  It only accepts a `Seek` to the position it is already at, which the
+extractor always does because it consumes blocks in order.
+
+Two passes on two `TJidac` instances, because the list has to be read before
+the files it describes can be verified: the first selects only the list and
+captures it into a `TMemoryStream`; the second verifies everything.
+
+Two things that were needed to make the extractor behave: `check` forces the
+extraction (otherwise the comparison with a local file of the same name would
+skip it) and it suppresses `Equal()`, which compares with the file system and
+not with the archive.
+
+Exit codes: **0** everything matches, **1** any mismatch, **2** the archive
+carries no list.  A file of the archive that the list does not mention is
+reported with `?` but is not a failure: the list describes the files of one
+transaction, so an archive updated later without `-hash` has files it cannot
+know about (verified with a two-version archive: 2 ok, 1 not in the list, exit
+0).
+
+Checked by hand: flipping one byte inside a data block gives `FAIL b.bin` plus
+the block checksum error and exit 1; an archive without `-hash` exits 2.
+`tests/cli.sh` covers the three cases (134 checks).

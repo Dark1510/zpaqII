@@ -120,6 +120,24 @@ else bad "-hash: extraction"; fi
 n=$(grep -c . xu/VFILE-hash.txt 2>/dev/null)
 if [ "$n" = 4 ]; then ok; else bad "-hash: list has ${n:-0} lines"; fi
 
+# ---- check: verifies the digest list without writing anything ----
+rm -f ck.zpaq ckbad.zpaq
+ZPAQII_NOW=$NOW "$P" add ck.zpaq d -m1 -hash >/dev/null 2>&1
+"$P" check ck.zpaq >/dev/null 2>&1
+r=$?
+if [ "$r" = 0 ]; then ok; else bad "check healthy (rc $r)"; fi
+cp ck.zpaq ckbad.zpaq
+sz=$(stat -c%s ckbad.zpaq)
+printf '\377' | dd of=ckbad.zpaq bs=1 seek=$((sz / 3)) conv=notrunc status=none
+"$P" check ckbad.zpaq >/dev/null 2>&1
+r=$?
+if [ "$r" != 0 ]; then ok; else bad "check corrupted archive (rc 0)"; fi
+rm -f nolist.zpaq
+ZPAQII_NOW=$NOW "$P" add nolist.zpaq d/a.txt -m1 >/dev/null 2>&1
+"$P" check nolist.zpaq >/dev/null 2>&1
+r=$?
+if [ "$r" = 2 ]; then ok; else bad "check without a list (rc $r)"; fi
+
 # ---- -to: single target, several targets, prefix rename ----
 extract_both() { # tag, args...
   local tag=$1
