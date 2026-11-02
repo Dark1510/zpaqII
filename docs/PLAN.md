@@ -445,3 +445,32 @@ oracle (68 checks).
 `command='c'`) but `doCommand()` has no branch for `'c'`, so it prints the usage
 message and exits with 1.  The port behaves identically; `tests/cli.sh` checks
 that both return the same exit code.  Nothing to implement.
+
+## E16: -repack F [X]
+
+`extract -repack F [X]` writes the archive to a new file instead of extracting
+it:
+
+* the D blocks that the current files still reference are copied verbatim
+  (in ascending block order), so nothing is recompressed and the result is
+  deterministic;
+* the H blocks are regenerated from `ht` (original `bsize` plus the fragment
+  table), dated like the last version;
+* the I blocks are written again for every entry with a date (upstream does not
+  apply the file selection to a repack), after `-to` renaming;
+* a new C block with data size -1 is written first and rewritten at the end with
+  the copied size, exactly like `add` does;
+* `X` replaces the key: a fresh random salt is generated when it is given, and
+  no key means the output is unencrypted even if the input was encrypted.
+
+`-repack -all` is a different path: it re-encrypts the whole archive byte by
+byte (`copy(in, out)`), and upstream rejects it when any partial-selection
+option is present (`files`, `-to`, `-only`, `-noattributes`, `-until`,
+`-method`) with `-repack -all does not allow partial copy`.  An existing output
+requires `-force`, and a streaming archive fails with `empty block` (its block
+sizes are unknown), which the port reproduces.
+
+`tests/cli.sh` compares the new archive bytes and the normalised output against
+the oracle for: plain repack, `-all`, a new key (with `FAKE_RANDOM`), keeping
+the key, a round trip through extraction, the `-all` partial-copy rejection and
+an existing output file (76 checks).

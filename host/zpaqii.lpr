@@ -96,6 +96,11 @@ begin
   WriteLn('         -force/-f           add: re-add changed contents');
   WriteLn('         -tN / -threads N    compression threads (0 = one per CPU)');
   WriteLn('         -until N            roll back to the N-th update');
+  WriteLn('         -repack F [X]       extract to new archive F with key X (default: none)');
+  WriteLn('         -all [N]            extract/list versions in N [4] digit directories');
+  WriteLn('         -summary N          list: top N by size (-1: fragment ids)');
+  WriteLn('         -test               extract: verify but do not write files');
+  WriteLn('         -noattributes       ignore/don''t save attributes');
   WriteLn('         Use * or ???? in the archive name for multi-part archives.');
 end;
 
@@ -309,6 +314,12 @@ var
   errors: Integer;
   nfiles: Cardinal;
 begin
+  { -repack -all copies the whole archive before reading it (upstream). }
+  if (not listOnly) and (j.repack <> '') and (j.all > 0) then
+  begin
+    Result := j.RepackWhole(force);
+    Exit;
+  end;
   j.ReadArchive(errors, nfiles);
   if (j.indexName <> '') and (not listOnly) then
   begin
@@ -322,9 +333,16 @@ begin
   end
   else if j.isJidac then
   begin
-    Result := j.Extract(force, j.dotest);
-    if errors <> 0 then Result := 1;
+    if j.repack <> '' then
+      Result := j.RepackSelected(force)
+    else
+    begin
+      Result := j.Extract(force, j.dotest);
+      if errors <> 0 then Result := 1;
+    end;
   end
+  else if j.repack <> '' then
+    Result := j.RepackSelected(force)   { errors out, like upstream }
   else
     Result := ExtractStreaming(j, False);
 end;
@@ -373,6 +391,8 @@ end;
 
 var
   cmd, archive, method, key, indexName: string;
+  repackName, newKey: string;
+  methodSet: Boolean;
   files, tofiles, onlyfiles, notfiles: TStringList;
   nottype: string;
   i: Integer;
@@ -410,6 +430,9 @@ begin
 
   archive := '';
   method := '1';
+  methodSet := False;
+  repackName := '';
+  newKey := '';
   key := '';
   indexName := '';
   untilVer := DEFAULT_VERSION;
@@ -438,9 +461,13 @@ begin
       begin
         Inc(i);
         method := ParamStr(i);
+        methodSet := True;
       end
       else if (Copy(a, 1, 2) = '-m') and (Length(a) > 2) then
-        method := Copy(a, 3, MaxInt)
+      begin
+        method := Copy(a, 3, MaxInt);
+        methodSet := True;
+      end
       else if (Copy(a, 1, 2) = '-t') and (Length(a) > 2) and
               (a[3] >= '0') and (a[3] <= '9') then
         nthreads := StrToIntDef(Copy(a, 3, MaxInt), 0)
@@ -497,6 +524,17 @@ begin
         noattrs := True
       else if (a = '-test') then
         dotest := True
+      else if (a = '-repack') and (i < ParamCount) then
+      begin
+        Inc(i);
+        repackName := ParamStr(i);
+        if (i < ParamCount) and
+           ((ParamStr(i + 1) = '') or (ParamStr(i + 1)[1] <> '-')) then
+        begin
+          Inc(i);
+          newKey := KeyDigest(ParamStr(i));
+        end;
+      end
       else if (a = '-summary') then
       begin
         Inc(i);
@@ -596,6 +634,9 @@ begin
         jadd.dotest := dotest;
         jadd.noattributes := noattrs;
         jadd.all := allver;
+        jadd.repack := repackName;
+        jadd.newpassword := newKey;
+        jadd.methodSet := methodSet;
         if jadd.version < 0 then
         begin
           { -until -N: count from the end, like upstream }

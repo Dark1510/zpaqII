@@ -44,9 +44,6 @@ printf 'tiny\n' > d/c.txt
 # normalise a list output: drop the banner and the timing line
 norm() { grep -v -e '^zpaq v' -e ' seconds (' ; }
 
-# normalise a list output: drop the banner and the timing line
-norm() { grep -v -e '^zpaq v' -e ' seconds (' ; }
-
 # ---- -fragment: the archive must be bit-identical ----
 for f in 0 3 6 9 12; do
   rm -f fu.zpaq fo.zpaq
@@ -212,7 +209,6 @@ if diff -r o1 o2 >/dev/null 2>&1 && diff -r o1 o4 >/dev/null 2>&1 &&
 else
   bad "extraction: -t1/-t2/-t4/-t8 differ"
 fi
-cd ..
 cd ..
 
 # ---- list comparison against the file system ----
@@ -388,6 +384,54 @@ mkdir ay az
 if diff -r ay az >/dev/null 2>&1; then ok; else bad "-all 2 extract"; fi
 cd ..
 
+# ---- -repack F [X]: rewrite the archive into a new file ----
+repack_both() {  # name, new key (may be empty), args...
+  local n=$1 nk=$2
+  shift 2
+  rm -rf rp1 rp2
+  mkdir rp1 rp2
+  (cd rp1 && "$Z" extract "$@" -repack out.zpaq $nk -t1 >log 2>&1)
+  ru=$?
+  (cd rp2 && "$P" extract "$@" -repack out.zpaq $nk >log 2>&1)
+  rp=$?
+  if [ "$ru" = "$rp" ] && cmp -s rp1/out.zpaq rp2/out.zpaq &&
+     diff <(norm <rp1/log) <(norm <rp2/log) >/dev/null 2>&1; then
+    ok
+  else
+    bad "$n (rc $ru/$rp)"
+  fi
+}
+repack_both "-repack plain" "" ../base.zpaq
+repack_both "-repack -all" "" ../base.zpaq -all
+FAKE_RANDOM=31 LD_PRELOAD=$FT repack_both "-repack new key" nueva ../base.zpaq
+FAKE_RANDOM=32 LD_PRELOAD=$FT repack_both "-repack keeps the key" secret ../ku.zpaq -key secret
+rm -rf rpx
+mkdir rpx
+if "$P" extract rp1/out.zpaq -to rpx -key secret >/dev/null 2>&1 &&
+   diff -r d rpx/d >/dev/null 2>&1; then ok; else bad "-repack: round trip"; fi
+
+rm -rf rp1 rp2
+mkdir rp1 rp2
+(cd rp1 && "$Z" extract ../base.zpaq -all -only d/a.txt -repack out.zpaq -t1 >log 2>&1)
+ru=$?
+(cd rp2 && "$P" extract ../base.zpaq -all -only d/a.txt -repack out.zpaq >log 2>&1)
+rp=$?
+if [ "$ru" = "$rp" ] && diff <(norm <rp1/log) <(norm <rp2/log) >/dev/null 2>&1; then
+  ok
+else
+  bad "-repack -all partial copy"
+fi
+
+printf 'x' > rp1/exists.zpaq
+printf 'x' > rp2/exists.zpaq
+(cd rp1 && "$Z" extract ../base.zpaq -repack exists.zpaq -t1 >log 2>&1); ru=$?
+(cd rp2 && "$P" extract ../base.zpaq -repack exists.zpaq >log 2>&1); rp=$?
+if [ "$ru" = "$rp" ] && diff <(norm <rp1/log) <(norm <rp2/log) >/dev/null 2>&1; then
+  ok
+else
+  bad "-repack existing output (rc $ru/$rp)"
+fi
+
 echo
 echo "cli: $cases checks, $fails failures"
 if [ $fails -ne 0 ]; then
@@ -395,4 +439,4 @@ if [ $fails -ne 0 ]; then
   exit 1
 fi
 echo "not covered yet (known gaps):"
-echo "  -repack F [X]"
+echo "  (none)"

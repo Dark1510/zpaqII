@@ -87,6 +87,9 @@ type
     summary: Integer;        { -summary N: top N by size, -1 = fragment ids }
     dotest: Boolean;         { -test: verify but do not write files }
     noattributes: Boolean;   { -noattributes: ignore/save attributes }
+    repack: string;          { -repack F: write the archive to F }
+    newpassword: string;     { -repack F [X]: new key digest ('' = none) }
+    methodSet: Boolean;      { -method given (rejected with -repack -all) }
     threads: Integer;        { -tN: compression threads, 0 = one per CPU }
     indexName: string;       { -index F: index archive used by add/extract }
     dhsize: Int64;           { total size of D blocks according to H blocks }
@@ -104,6 +107,8 @@ type
     function List(force: Boolean): Integer;
     function Equal(dtr: TDT; const fn: string): Boolean;
     function Extract(force: Boolean; testOnly: Boolean = False): Integer;
+    function RepackWhole(force: Boolean): Integer;
+    function RepackSelected(force: Boolean): Integer;
     function Add(const addFiles: TStringList; const method: string; date: Int64;
                  force: Boolean; out errors: Integer): Integer;
     function FindBlockFor(frag: Cardinal): Integer;
@@ -729,6 +734,9 @@ begin
   summary := 0;
   dotest := False;
   noattributes := False;
+  repack := '';
+  newpassword := '';
+  methodSet := False;
   threads := 0;
   indexName := '';
   dhsize := 0;
@@ -1565,6 +1573,242 @@ begin
     osink.Free;
     inArc.Free;
   end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ repack (extract -repack F [X])                                      }
+{ ------------------------------------------------------------------ }
+
+procedure PutI(b: TZqBuf; x: Int64; n: Integer); forward;
+
+{ -repack with -all: re-encrypt the whole archive into a new file.  The
+  block contents are not touched, only the key (upstream's copy(in, out)). }
+function TJidac.RepackWhole(force: Boolean): Integer;
+var
+  inArc: TInputArchive;
+  outArc: TOutputArchive;
+  salt: array[0..31] of AnsiChar;
+  buf: array[0..4095] of AnsiChar;
+  nr: LongInt;
+  total: Int64;
+begin
+  if (files.Count > 0) or (tofiles.Count > 0) or (onlyfiles.Count > 0) or
+     noattributes or (version <> DEFAULT_VERSION) or methodSet then
+    raise Exception.Create('-repack -all does not allow partial copy');
+  if force then DeleteFile(repack);
+  if FileExists(repack) then
+    raise Exception.Create('output file exists');
+
+  inArc := TInputArchive.Create(archive, password);
+  try
+    FillChar(salt, SizeOf(salt), 0);
+    if newpassword <> '' then zq_random(@salt[0], 32);
+    if newpassword <> '' then
+      outArc := TOutputArchive.Create(repack, newpassword, @salt[0], 0)
+    else
+      outArc := TOutputArchive.Create(repack, '', nil, 0);
+    try
+      total := 0;
+      while True do
+      begin
+        nr := inArc.Read(@buf[0], SizeOf(buf));
+        if nr < 1 then Break;
+        outArc.WriteBuf(@buf[0], nr);
+        Inc(total, nr);
+      end;
+      Write(archive, ' ', Format('%1.0f', [total + 0.0]), ' ', repack,
+            ' -> ', Format('%1.0f', [outArc.Tell() + 0.0]));
+      WriteLn;
+    finally
+      outArc.Free;
+    end;
+  finally
+    inArc.Free;
+  end;
+  Result := 0;
+end;
+
+{ -repack F [X]: build a new archive with only the D blocks that the files
+  need, regenerate the H blocks and write the I blocks again.  The blocks
+  themselves are copied verbatim, so the result is deterministic. }
+function TJidac.RepackSelected(force: Boolean): Integer;
+var
+  i, j, nb, dtcount: Integer;
+  dtr: TDT;
+  inArc: TInputArchive;
+  outArc: TOutputArchive;
+  w: TZqWriter;
+  isb: TZqBuf;
+  salt: array[0..31] of AnsiChar;
+  cstart, dstart, csize: Int64;
+  need, keep: array of Boolean;
+  fn, cfn, comment: string;
+  frag: Cardinal;
+  k: Cardinal;
+  badfrag: Boolean;
+begin
+  if Length(ver) < 2 then
+    raise Exception.Create('cannot repack streaming archive');
+
+  SetLength(need, Length(blocks));
+  SetLength(keep, dt.Count);
+  dtcount := 0;
+
+  { Label the files and the blocks they need.  Upstream does not apply the
+    file selection to a repack: every entry with a date is kept. }
+  for i := 0 to dt.Count - 1 do
+  begin
+    dtr := TDT(dt.Objects[i]);
+    keep[i] := False;
+    if (dtr.date = 0) or (dt[i] = '') then Continue;
+    if dt[i][Length(dt[i])] = '/' then
+    begin
+      keep[i] := True;
+      Continue;
+    end;
+    if Length(blocks) = 0 then Continue;
+    badfrag := False;
+    for j := 0 to High(dtr.ptr) do
+    begin
+      frag := dtr.ptr[j];
+      if (frag = 0) or (frag >= Cardinal(Length(ht))) or (ht[frag].usize < -1) then
+      begin
+        WriteLn(StdErr, dt[i], ': bad frag IDs, skipping...');
+        badfrag := True;
+        Break;
+      end;
+      nb := FindBlockFor(frag);
+      if nb >= 0 then need[nb] := True;
+    end;
+    if not badfrag then keep[i] := True;
+  end;
+
+  { Total compressed size of the D blocks we keep. }
+  csize := 0;
+  for i := 0 to High(blocks) do
+  begin
+    if blocks[i].bsize < 1 then
+      raise Exception.Create('empty block');
+    if need[i] then Inc(csize, blocks[i].bsize);
+  end;
+
+  inArc := nil;
+  outArc := nil;
+  isb := zq_buf_new(64);
+  try
+    inArc := TInputArchive.Create(archive, password);
+    if (not force) and FileExists(repack) then
+      raise Exception.Create('repack output exists');
+    DeleteFile(repack);
+    FillChar(salt, SizeOf(salt), 0);
+    if newpassword <> '' then zq_random(@salt[0], 32);
+    if newpassword <> '' then
+      outArc := TOutputArchive.Create(repack, newpassword, @salt[0], 0)
+    else
+      outArc := TOutputArchive.Create(repack, '', nil, 0);
+    w := OutputWriter(outArc);
+    comment := 'jDC' + #1;
+    cstart := outArc.Tell();
+
+    { C block: data size unknown for now (-1), one version }
+    zq_buf_resize(isb, 0);
+    PutI(isb, -1, 8);
+    cfn := 'jDC' + Itos(ver[1].date, 14) + 'c' + Itos(1, 10);
+    if zq_compress_block(isb, w, '0', PAnsiChar(AnsiString(cfn)),
+                         PAnsiChar(comment), 1) < 0 then
+      raise Exception.Create(string(zq_last_error));
+    dstart := outArc.Tell();
+
+    { D blocks, verbatim }
+    for i := 0 to High(blocks) do
+      if need[i] then
+      begin
+        inArc.Seek(blocks[i].offset, 0);
+        if not CopyBytes(inArc, outArc, blocks[i].bsize) then
+          raise Exception.Create('EOF');
+      end;
+    Write('Data ', Format('%1.0f', [csize + 0.0]), ' -> ');
+    csize := outArc.Tell() - dstart;
+    WriteLn(Format('%1.0f', [csize + 0.0]));
+
+    { H blocks, dated like the last version }
+    for i := 0 to High(blocks) do
+      if need[i] then
+      begin
+        zq_buf_resize(isb, 0);
+        PutI(isb, blocks[i].bsize, 4);
+        for j := 0 to Integer(blocks[i].frags) - 1 do
+        begin
+          k := blocks[i].start + Cardinal(j);
+          zq_buf_write(isb, @ht[k].sha1[0], 20);
+          PutI(isb, ht[k].usize, 4);
+        end;
+        fn := 'jDC' + Itos(ver[High(ver)].date, 14) + 'h' +
+              Itos(blocks[i].start, 10);
+        if zq_compress_block(isb, w, '0', PAnsiChar(AnsiString(fn)),
+                             PAnsiChar(comment), 1) < 0 then
+          raise Exception.Create(string(zq_last_error));
+      end;
+
+    { I blocks with the selected file list }
+    zq_buf_resize(isb, 0);
+    i := 0;
+    while True do
+    begin
+      if (i < dt.Count) and keep[i] then
+      begin
+        dtr := TDT(dt.Objects[i]);
+        fn := Rename(dt[i]);
+        PutI(isb, dtr.date, 8);
+        zq_buf_write(isb, PAnsiChar(AnsiString(fn)), Length(fn));
+        zq_buf_write(isb, #0, 1);
+        if (dtr.attr and 255) = Ord('u') then
+        begin
+          PutI(isb, 3, 4);
+          PutI(isb, dtr.attr, 3);
+        end
+        else if (dtr.attr and 255) = Ord('w') then
+        begin
+          PutI(isb, 5, 4);
+          PutI(isb, dtr.attr, 5);
+        end
+        else
+          PutI(isb, 0, 4);
+        PutI(isb, Length(dtr.ptr), 4);
+        for j := 0 to High(dtr.ptr) do PutI(isb, dtr.ptr[j], 4);
+      end;
+      if (zq_buf_size(isb) > 16000) or
+         ((zq_buf_size(isb) > 0) and (i >= dt.Count)) then
+      begin
+        Inc(dtcount);
+        fn := 'jDC' + Itos(ver[High(ver)].date) + 'i' + Itos(dtcount, 10);
+        if zq_compress_block(isb, w, '1', PAnsiChar(AnsiString(fn)),
+                             PAnsiChar(comment), 1) < 0 then
+          raise Exception.Create(string(zq_last_error));
+        zq_buf_resize(isb, 0);
+      end;
+      if i >= dt.Count then Break;
+      Inc(i);
+    end;
+
+    Write(archive, ' ', Format('%1.0f', [lastOffset + 0.0]), ' -> ',
+          repack, ' ', Format('%1.0f', [outArc.Tell() + 0.0]));
+    WriteLn;
+
+    { Rewrite the C block now that the data size is known }
+    outArc.Seek(cstart, 0);
+    zq_buf_resize(isb, 0);
+    PutI(isb, csize, 8);
+    if zq_compress_block(isb, w, '0', PAnsiChar(AnsiString(cfn)),
+                         PAnsiChar(comment), 1) < 0 then
+      raise Exception.Create(string(zq_last_error));
+    outArc.CloseArchive;
+  finally
+    outArc.Free;
+    inArc.Free;
+    zq_buf_free(isb);
+  end;
+  Result := 0;
 end;
 
 function TJidac.Extract(force: Boolean; testOnly: Boolean): Integer;
