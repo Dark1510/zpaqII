@@ -17,8 +17,8 @@ W=$B/cliwork
 rm -rf "$W"
 mkdir -p "$W"
 cd "$W" || exit 1
-P=../zpaqii
-FT=../faketime.so
+P=$PWD/../zpaqii
+FT=$PWD/../faketime.so
 [ -x "$Z" ] || { echo "missing upstream: $Z"; exit 2; }
 [ -x "$P" ] || { echo "missing zpaqii"; exit 2; }
 [ -f "$FT" ] || { echo "missing faketime.so"; exit 2; }
@@ -157,6 +157,64 @@ mkdir xu xo
 "$P" extract 'op????.zpaq' -to xo >/dev/null 2>&1
 if diff -r xu xo >/dev/null 2>&1; then ok; else bad "multi-part extract"; fi
 
+# ---- -index: create an index from an archive (extract -index F) ----
+rm -rf ix
+mkdir ix
+cd ix || exit 1
+printf 'uno\n' > a.txt
+head -c 25000 /dev/urandom > b.bin
+FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add arc.zpaq a.txt b.bin -m1 -t1 >/dev/null 2>&1
+printf 'dos dos\n' > a.txt
+FAKE_TIME=$((NOW + 1000)) LD_PRELOAD=$FT "$Z" add arc.zpaq a.txt -m1 -t1 >/dev/null 2>&1
+"$Z" extract arc.zpaq -index iu.zpaq -t1 >/dev/null 2>&1
+"$P" extract arc.zpaq -index io.zpaq >/dev/null 2>&1
+if cmp -s iu.zpaq io.zpaq; then ok; else bad "-index: create index"; fi
+"$P" extract arc.zpaq -index io.zpaq >/dev/null 2>&1
+rp=$?
+"$Z" extract arc.zpaq -index iu.zpaq -t1 >/dev/null 2>&1
+ru=$?
+if [ "$rp" = "$ru" ]; then ok; else bad "-index: existing index rc"; fi
+"$P" extract arc.zpaq -index io.zpaq -force >/dev/null 2>&1 && ok || bad "-index: -force"
+
+# encrypted index
+rm -f ka.zpaq kiU.zpaq kiO.zpaq
+FAKE_TIME=$NOW FAKE_RANDOM=7 LD_PRELOAD=$FT \
+  "$Z" add ka.zpaq a.txt b.bin -m1 -key pw -t1 >/dev/null 2>&1
+"$Z" extract ka.zpaq -index kiU.zpaq -key pw -t1 >/dev/null 2>&1
+"$P" extract ka.zpaq -index kiO.zpaq -key pw >/dev/null 2>&1
+if cmp -s kiU.zpaq kiO.zpaq; then ok; else bad "-index: encrypted"; fi
+
+# ---- -index: add to an indexed archive (one part per update) ----
+rm -rf ia
+mkdir ia
+cd ia || exit 1
+printf 'uno\n' > a.txt
+head -c 25000 /dev/urandom > b.bin
+FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add 'u????.zpaq' a.txt b.bin -m1 -index uidx.zpaq -t1 >/dev/null 2>&1
+ZPAQII_NOW=$NOW "$P" add 'o????.zpaq' a.txt b.bin -m1 -index oidx.zpaq >/dev/null 2>&1
+if cmp -s u0001.zpaq o0001.zpaq && cmp -s uidx.zpaq oidx.zpaq; then
+  ok
+else
+  bad "-index add: first part"
+fi
+printf 'dos dos dos\n' > a.txt
+FAKE_TIME=$((NOW + 1000)) LD_PRELOAD=$FT \
+  "$Z" add 'u????.zpaq' a.txt -m1 -index uidx.zpaq -t1 >/dev/null 2>&1
+ZPAQII_NOW=$((NOW + 1000)) \
+  "$P" add 'o????.zpaq' a.txt -m1 -index oidx.zpaq >/dev/null 2>&1
+if cmp -s u0002.zpaq o0002.zpaq && cmp -s uidx.zpaq oidx.zpaq; then
+  ok
+else
+  bad "-index add: second part"
+fi
+rm -rf xu xo
+mkdir xu xo
+"$Z" extract 'u????.zpaq' -to xu -t1 >/dev/null 2>&1
+"$P" extract 'o????.zpaq' -to xo >/dev/null 2>&1
+if diff -r xu xo >/dev/null 2>&1; then ok; else bad "-index multiply extract"; fi
+cd ..
+cd ..
+
 # ---- threads accepted (single threaded implementation) ----
 rm -f th.zpaq
 if ZPAQII_NOW=$NOW "$P" add th.zpaq t1.txt -m1 -t4 >/dev/null 2>&1 &&
@@ -174,5 +232,5 @@ if [ $fails -ne 0 ]; then
   exit 1
 fi
 echo "not covered yet (known gaps):"
-echo "  -index (read/write index archives), parallel compression with -tN>1,"
-echo "  list comparison against the file system (-force / =same / #different)"
+echo "  parallel compression with -tN>1, list comparison against the file"
+echo "  system (=same / #different / +external, -summary, -test, -repack)"

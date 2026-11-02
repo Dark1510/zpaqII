@@ -300,6 +300,7 @@ reference binary by `tests/cli.sh` (`make test-e6d`, 26 checks):
 | `-key X` | encrypted archives (SHA-256 of X feeds stretchKey) | encrypted add bit-identical with a deterministic `/dev/urandom`; cross extraction both ways; wrong password gives the same message and exit code |
 | `part*.zpaq` / `part????.zpaq` | multi-part archives: reading concatenates, each add appends a new part | both parts bit-identical; extraction identical |
 | `-force` / `-f` | add: re-append selected files; extract: overwrite | archives bit-identical |
+| `-index F` | extract: write an index of the archive (C/H/I blocks, no data); add: read the index, append a new part per update and extend the index | index, first part and second part bit-identical, encrypted too; upstream can continue adding on a port index |
 | `-tN` / `-threads N` | accepted (the implementation is single threaded) | options parsed, archives unchanged |
 
 Two real bugs were found while writing these checks:
@@ -313,7 +314,19 @@ Two real bugs were found while writing these checks:
   `stretchKey` password; the port passed the raw text, so archives were
   encrypted with a different key. Fixed with `KeyDigest()` in the host.
 
-Still open in the CLI: `-index` (read/write index archives), parallel
-compression with `-tN > 1` (upstream's output depends on the thread count), and
-the `list` comparison against the file system (`=same`/`#different`/`+external`
-statuses, `-summary`, `-test`, `-repack`).
+Still open in the CLI: parallel compression with `-tN > 1` (upstream's output
+depends on the thread count) and the `list` comparison against the file system
+(`=same`/`#different`/`+external` statuses, `-summary`, `-test`, `-repack`).
+
+### How `-index` works (as implemented)
+
+* `extract archive -index F` writes F as a byte copy of the archive in which
+  every transaction keeps its C, H and I blocks and loses the D blocks; the C
+  block is patched to declare a data size of 0 (8 zero bytes plus the SHA-1 of
+  eight zero bytes). For an encrypted archive the index salt is the archive
+  salt with `salt[0] ^= '7' ^ 'z'`.
+* `add archive files -index F` reads F for the metadata (it is a normal zpaq
+  archive as far as the reader is concerned), appends the new data to
+  `subpart(archive, versions+1)` and writes the C (size 0), H and I blocks to
+  both the new part and F through a tee writer. `offset = end_of_index +
+  sum(H block sizes)` is the logical position of the new part.

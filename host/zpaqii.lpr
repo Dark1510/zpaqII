@@ -90,6 +90,8 @@ begin
   WriteLn('         -not files...       exclude these prefixes');
   WriteLn('         -key PASSWORD       create or access an encrypted archive');
   WriteLn('         -fragment N         average fragment size 2^N KiB (default 6)');
+  WriteLn('         -index F            extract: write an index F for the archive');
+  WriteLn('                             add: append a part and update index F');
   WriteLn('         -force/-f           add: re-add changed contents');
   WriteLn('         -until N            roll back to the N-th update');
   WriteLn('         Use * or ???? in the archive name for multi-part archives.');
@@ -293,7 +295,12 @@ var
   nfiles: Cardinal;
 begin
   j.ReadArchive(errors, nfiles);
-  if listOnly then
+  if (j.indexName <> '') and (not listOnly) then
+  begin
+    Result := j.WriteIndex(j.indexName, force);
+    if errors <> 0 then Result := 1;
+  end
+  else if listOnly then
   begin
     j.List;               { tolerant: works for streaming and journaling }
     Result := 0;          { upstream list() always returns 0 }
@@ -323,7 +330,7 @@ begin
 end;
 
 var
-  cmd, archive, method, key: string;
+  cmd, archive, method, key, indexName: string;
   files, tofiles, onlyfiles, notfiles: TStringList;
   nottype: string;
   i: Integer;
@@ -355,6 +362,7 @@ begin
   archive := '';
   method := '1';
   key := '';
+  indexName := '';
   untilVer := DEFAULT_VERSION;
   dateSet := False;
   dateVal := 0;
@@ -415,6 +423,11 @@ begin
           if ParamStr(i)[1] = '=' then nottype := ParamStr(i)
           else notfiles.Add(ParamStr(i));
         end;
+      end
+      else if (a = '-index') then
+      begin
+        Inc(i);
+        indexName := ParamStr(i);
       end
       else if (a = '-fragment') then
       begin
@@ -477,6 +490,7 @@ begin
       begin
         jadd := TJidac.Create(archive, key, DEFAULT_VERSION);
         jadd.fragment := frag;
+        jadd.indexName := indexName;
         for i := 0 to files.Count - 1 do jadd.files.Add(files[i]);
         try
           rc := jadd.Add(files, method, dateVal, force, errs);
@@ -498,6 +512,7 @@ begin
         for i := 0 to onlyfiles.Count - 1 do jadd.onlyfiles.Add(onlyfiles[i]);
         for i := 0 to notfiles.Count - 1 do jadd.notfiles.Add(notfiles[i]);
         jadd.nottype := nottype;
+        jadd.indexName := indexName;
         if (cmd = 'list') or (cmd = 'l') then
           Finish(RunExtract(jadd, True, force))
         else

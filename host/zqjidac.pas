@@ -83,6 +83,9 @@ type
     notfiles: TStringList;   { -not: exclude these prefixes }
     nottype: string;         { -not =...: list chars to suppress }
     fragment: Integer;       { -fragment N: 2^N KiB average fragment size }
+    indexName: string;       { -index F: index archive used by add/extract }
+    dhsize: Int64;           { total size of D blocks according to H blocks }
+    dcsize: Int64;           { total size of D blocks according to C blocks }
     lastOffset: Int64;       { end of the last block scanned (upstream csize) }
     nfilesSeen: Cardinal;    { files found while scanning }
     isJidac: Boolean;
@@ -90,7 +93,9 @@ type
     destructor Destroy; override;
     function IsSelected(const fn: string; rn: Boolean): Boolean;
     function Rename(const name: string): string;
-    function ReadArchive(out errors: Integer; out nfiles: Cardinal): Int64;
+    function WriteIndex(const indexFile: string; force: Boolean): Integer;
+    function ReadArchive(out errors: Integer; out nfiles: Cardinal;
+                        const src: string = ''): Int64;
     function List: Integer;
     function Extract(force: Boolean): Integer;
     function Add(const addFiles: TStringList; const method: string; date: Int64;
@@ -111,6 +116,36 @@ type
   TOutSink = class
     buf: TZqBuf;
   end;
+
+  { Writes every byte to two archives (archive + index, upstream WriterPair). }
+  TWriterPair = class
+    a, b: TOutputArchive;
+  end;
+
+procedure PairPut(ctx: Pointer; c: LongInt); cdecl;
+var
+  p: TWriterPair;
+begin
+  p := TWriterPair(ctx);
+  p.a.Put(c);
+  if p.b <> nil then p.b.Put(c);
+end;
+
+procedure PairWrite(ctx: Pointer; buf: PAnsiChar; n: LongInt); cdecl;
+var
+  p: TWriterPair;
+begin
+  p := TWriterPair(ctx);
+  p.a.WriteBuf(buf, n);
+  if p.b <> nil then p.b.WriteBuf(buf, n);
+end;
+
+function PairWriter(p: TWriterPair): TZqWriter;
+begin
+  Result.put := @PairPut;
+  Result.write := @PairWrite;
+  Result.ctx := Pointer(p);
+end;
 
 procedure NameSinkPut(ctx: Pointer; c: LongInt); cdecl;
 begin
@@ -195,6 +230,9 @@ begin
   notfiles.CaseSensitive := True;
   nottype := '';
   fragment := 6;
+  indexName := '';
+  dhsize := 0;
+  dcsize := 0;
   lastOffset := 0;
   nfilesSeen := 0;
   isJidac := False;
@@ -367,10 +405,131 @@ begin
 end;
 
 { ------------------------------------------------------------------ }
+{ index creation (extract -index F)                                    }
+{ ------------------------------------------------------------------ }
+
+type
+  TByte34 = array[0..33] of Byte;
+
+{ The C block of a transaction is rewritten with a data size of 0 so the
+  index can be read without the D blocks: 8 zero bytes (csize), the 4 byte
+  compressed size terminator, the SHA-1 marker, SHA-1 of 8 zero bytes and the
+  end of block marker. }
+const
+  INDEX_CBLOCK_PATCH: TByte34 = (
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0,
+    $fd,
+    $05, $fe, $40, $57, $53, $16, $6f, $12, $55, $59, $e7, $c9, $ac, $55,
+    $86, $54, $f1, $07, $c7, $e9,
+    $ff);
+
+function ReadFully(a: TInputArchive; buf: PAnsiChar; n: Int64): Boolean;
+var
+  got, want: LongInt;
+begin
+  while n > 0 do
+  begin
+    if n > $40000 then want := $40000 else want := LongInt(n);
+    got := a.Read(buf, want);
+    if got <> want then Exit(False);
+    Inc(buf, got);
+    Dec(n, got);
+  end;
+  Result := True;
+end;
+
+function CopyBytes(a: TInputArchive; o: TOutputArchive; n: Int64): Boolean;
+var
+  buf: array[0..65535] of AnsiChar;
+  got, want: LongInt;
+begin
+  while n > 0 do
+  begin
+    if n > SizeOf(buf) then want := SizeOf(buf) else want := LongInt(n);
+    got := a.Read(@buf[0], want);
+    if got <> want then Exit(False);
+    o.WriteBuf(@buf[0], got);
+    Dec(n, got);
+  end;
+  Result := True;
+end;
+
+{ Write an index of this archive to indexFile: every transaction keeps its C,
+  H and I blocks and loses the D blocks (upstream's "extract -index F"). }
+function TJidac.WriteIndex(const indexFile: string; force: Boolean): Integer;
+var
+  i: Integer;
+  inArc: TInputArchive;
+  outArc: TOutputArchive;
+  hdr: array[0..255] of AnsiChar;
+  hsize: Integer;
+  endPos, n: Int64;
+  salt: array[0..31] of AnsiChar;
+  saltPtr: PAnsiChar;
+  fs: TFileStream;
+begin
+  if Length(ver) < 2 then
+    raise Exception.Create('no journaling data');
+  if force and FileExistsUTF8(indexFile) then DeleteFileUTF8(indexFile);
+  if FileExistsUTF8(indexFile) then
+    raise Exception.Create('index file exists');
+
+  saltPtr := nil;
+  if ver[1].offset = 32 then   { encrypted archive: reuse its salt }
+  begin
+    if not FileExistsUTF8(SubPart(archive, 1)) then
+      raise Exception.Create('cannot read part 1');
+    fs := TFileStream.Create(SubPart(archive, 1), fmOpenRead or fmShareDenyNone);
+    try
+      if fs.Read(salt, 32) <> 32 then
+        raise Exception.Create('cannot read salt');
+    finally
+      fs.Free;
+    end;
+    salt[0] := AnsiChar(Ord(salt[0]) xor (Ord('7') xor Ord('z')));
+    saltPtr := @salt[0];
+  end;
+
+  inArc := TInputArchive.Create(archive, password);
+  outArc := TOutputArchive.Create(indexFile, password, saltPtr, 0);
+  try
+    for i := 1 to High(ver) do
+    begin
+      if inArc.Tell() <> ver[i].offset then
+        raise Exception.Create('I''m lost');
+      hsize := Integer(ver[i].data_offset - ver[i].offset);
+      if (hsize < 70) or (hsize > 255) then
+        raise Exception.Create('bad C block size');
+      if not ReadFully(inArc, @hdr[0], hsize) then
+        raise Exception.Create('EOF in header');
+      if (hdr[hsize - 36] <> #9) or (hdr[hsize - 22] <> #$fd) or
+         (hdr[hsize - 1] <> #$ff) then
+        raise Exception.Create('C block in weird format');
+      Move(INDEX_CBLOCK_PATCH, hdr[hsize - 34], 34);
+      outArc.WriteBuf(@hdr[0], hsize);
+      inArc.Seek(ver[i].csize, 1);      { skip the D blocks }
+      if i < High(ver) then endPos := ver[i + 1].offset
+      else endPos := lastOffset;
+      n := endPos - inArc.Tell();
+      if (n < 0) or (not CopyBytes(inArc, outArc, n)) then
+        raise Exception.Create('EOF');
+    end;
+    Write(indexFile, ' -> ', Format('%1.0f', [outArc.Tell + 0.0]));
+    WriteLn;
+    Result := 0;
+  finally
+    outArc.Free;
+    inArc.Free;
+  end;
+end;
+
+{ ------------------------------------------------------------------ }
 { read_archive                                                        }
 { ------------------------------------------------------------------ }
 
-function TJidac.ReadArchive(out errors: Integer; out nfiles: Cardinal): Int64;
+function TJidac.ReadArchive(out errors: Integer; out nfiles: Cardinal;
+                            const src: string): Int64;
 var
   inArc: TInputArchive;
   d: TZqDecompresser;
@@ -379,6 +538,7 @@ var
   filesSeen: Cardinal;
   lastfile: string;
   block_offset, data_offset: Int64;
+  arcName: string;
   found_data, first, done, skip, restart: Boolean;
   mem: Double;
   rc: Integer;
@@ -426,17 +586,20 @@ begin
   ver[0].updates := 0;
   ver[0].deletes := 0;
 
-  lastfile := archive;
+  dcsize := 0;
+  dhsize := 0;
+  if src <> '' then arcName := src else arcName := archive;
+  lastfile := arcName;
   if Copy(lastfile, Length(lastfile) - 4, 5) = '.zpaq' then
     SetLength(lastfile, Length(lastfile) - 5);
-  if not FileExistsUTF8(SubPart(archive, 1)) then
+  if not FileExistsUTF8(SubPart(arcName, 1)) then
   begin
-    WriteLn(StdErr, archive, ' not found.');
+    WriteLn(StdErr, arcName, ' not found.');
     Inc(errors);
     Result := 0;
     Exit;
   end;
-  Write(archive);
+  Write(arcName);
   if version = DEFAULT_VERSION then Write(': ')
   else Write(' -until ', Format('%1.0f', [version + 0.0]), ': ');
 
@@ -446,9 +609,9 @@ begin
   first := True;
 
   try
-    inArc := TInputArchive.Create(archive, password);
+    inArc := TInputArchive.Create(arcName, password);
   except
-    WriteLn(StdErr, archive, ' not found.');
+    WriteLn(StdErr, arcName, ' not found.');
     errors := 1;
     Result := 0;
     Exit;
@@ -605,6 +768,7 @@ begin
               end
               else
               begin
+                Inc(dcsize, jmp);
                 if jmp <> 0 then inArc.Seek(data_offset + jmp, 0);
                 SetLength(ver, Length(ver) + 1);
                 vr := Default(TVer);
@@ -631,6 +795,7 @@ begin
                 raise Exception.Create('bad h fragment');
               s := zq_buf_data(osb);
               bsize := BToI(s);
+              Inc(dhsize, bsize);
               blk := Default(TBlockInfo);
               blk.start := Cardinal(num);
               blk.offset := data_offset;
@@ -1283,7 +1448,13 @@ var
   htsize: Cardinal;
   nfilesC: Cardinal;
   jdcComment: AnsiString;
-  outName, part0, partname: string;
+  outName, part0, partname, readSrc: string;
+  idxArc: TOutputArchive;
+  wIdx: TZqWriter;
+  idxInit: Boolean;
+  pair: TWriterPair;
+  wpw: TZqWriter;
+  idxSalt: array[0..31] of AnsiChar;
   parts: Integer;
   partOffset: Int64;
   fs: TFileStream;
@@ -1306,11 +1477,29 @@ begin
   jdcComment := 'jDC' + #1;
   m := method;
 
-  { Read the existing archive }
+  { Read the existing archive (or its index when -index is used) }
   header_pos := 0;
-  if FileExists(SubPart(archive, 1)) then
-    header_pos := ReadArchive(errors, nfilesC);
+  readSrc := archive;
+  if indexName <> '' then readSrc := indexName;
+  if FileExistsUTF8(SubPart(readSrc, 1)) then
+    header_pos := ReadArchive(errors, nfilesC, readSrc);
 
+  if indexName <> '' then
+  begin
+    { Indexed archive: each update is a new part named after the version
+      count, and indexName holds the metadata of all of them. }
+    if dcsize > 0 then
+      raise Exception.Create('index is a regular archive');
+    if version <> DEFAULT_VERSION then
+      raise Exception.Create('cannot truncate with an index');
+    partOffset := header_pos + dhsize;
+    header_pos := 32 * Ord((password <> '') and (partOffset = 0));
+    outName := SubPart(archive, Length(ver));
+    if FileExistsUTF8(outName) then
+      raise Exception.Create('archive exists');
+  end
+  else
+  begin
   { Multi-part: "*" or "????" in the name.  Reading concatenates the parts;
     each add appends a new part, like upstream. }
   outName := archive;
@@ -1340,10 +1529,29 @@ begin
     if FileExistsUTF8(outName) then
       raise Exception.Create('part exists');
   end;
+  end;
 
   { Encryption salt: reuse the one in the first part, or make a new one. }
   FillChar(salt, SizeOf(salt), 0);
-  if password <> '' then
+  if (password <> '') and (indexName <> '') then
+  begin
+    { The archive salt is derived from the index salt; a new index gets a
+      fresh random salt for the archive. }
+    if FileExistsUTF8(SubPart(indexName, 1)) then
+    begin
+      fs := TFileStream.Create(SubPart(indexName, 1), fmOpenRead or fmShareDenyNone);
+      try
+        if fs.Read(salt, 32) <> 32 then
+          raise Exception.Create('cannot read salt from index');
+      finally
+        fs.Free;
+      end;
+      salt[0] := AnsiChar(Ord(salt[0]) xor (Ord('7') xor Ord('z')));
+    end
+    else
+      zq_random(@salt[0], 32);
+  end
+  else if password <> '' then
   begin
     if FileExistsUTF8(SubPart(archive, 1)) then
     begin
@@ -1495,6 +1703,9 @@ begin
     outArc := TOutputArchive.Create(outName, password, @salt[0], partOffset)
   else
     outArc := TOutputArchive.Create(outName, password, nil, partOffset);
+  idxArc := nil;
+  pair := nil;
+  idxInit := False;
   sb := zq_buf_new(SizeUInt(blocksize) + 4096 - 128);
   isb := zq_buf_new(64);
   GetMem(fragbuf, maxFrag);
@@ -1717,6 +1928,31 @@ begin
 
     cdatasize := outArc.Tell() - header_end;
 
+    { With -index the metadata blocks are mirrored into the index file; its
+      transaction header records a data size of 0. }
+    wpw := w;
+    if indexName <> '' then
+    begin
+      Move(salt, idxSalt, 32);
+      idxSalt[0] := AnsiChar(Ord(idxSalt[0]) xor (Ord('7') xor Ord('z')));
+      if password <> '' then
+        idxArc := TOutputArchive.Create(indexName, password, @idxSalt[0], 0)
+      else
+        idxArc := TOutputArchive.Create(indexName, password, nil, 0);
+      wIdx := OutputWriter(idxArc);
+      zq_buf_resize(isb, 0);
+      PutI(isb, 0, 8);
+      fn := 'jDC' + Itos(date, 14) + 'c' + Itos(htsize, 10);
+      if zq_compress_block(isb, wIdx, '0', PAnsiChar(AnsiString(fn)),
+                           PAnsiChar(jdcComment), 1) < 0 then
+        raise Exception.Create(string(zq_last_error));
+      zq_buf_resize(isb, 0);
+      pair := TWriterPair.Create;
+      pair.a := outArc;
+      pair.b := idxArc;
+      wpw := PairWriter(pair);
+    end;
+
     { Fragment tables (h blocks) }
     SetLength(blocklist, Length(blocklist) + 1);
     blocklist[High(blocklist)] := Length(ht);
@@ -1732,7 +1968,7 @@ begin
           PutI(isb, ht[j].usize, 4);
         end;
         fn := 'jDC' + Itos(date, 14) + 'h' + Itos(blocklist[i], 10);
-        if zq_compress_block(isb, w, '0', PAnsiChar(AnsiString(fn)),
+        if zq_compress_block(isb, wpw, '0', PAnsiChar(AnsiString(fn)),
                              PAnsiChar(jdcComment), 1) < 0 then
           raise Exception.Create(string(zq_last_error));
         zq_buf_resize(isb, 0);
@@ -1753,7 +1989,7 @@ begin
         begin
           Inc(dtcount);
           fn := 'jDC' + Itos(date) + 'i' + Itos(dtcount, 10);
-          if zq_compress_block(isb, w, '1', PAnsiChar(AnsiString(fn)),
+          if zq_compress_block(isb, wpw, '1', PAnsiChar(AnsiString(fn)),
                                PAnsiChar(jdcComment), 1) < 0 then
             raise Exception.Create(string(zq_last_error));
           zq_buf_resize(isb, 0);
@@ -1810,7 +2046,7 @@ begin
       begin
         Inc(dtcount);
         fn := 'jDC' + Itos(date) + 'i' + Itos(dtcount, 10);
-        if zq_compress_block(isb, w, '1', PAnsiChar(AnsiString(fn)),
+        if zq_compress_block(isb, wpw, '1', PAnsiChar(AnsiString(fn)),
                              PAnsiChar(jdcComment), 1) < 0 then
           raise Exception.Create(string(zq_last_error));
         zq_buf_resize(isb, 0);
@@ -1831,9 +2067,10 @@ begin
     outArc.Seek(0, 2);
     archive_size := outArc.Tell();
 
-    if (added + removed = 0) and (archive_end - header_pos = 104) then
+    if (indexName = '') and (added + removed = 0) and
+       (archive_end - header_pos = 104) then
       archive_end := header_pos;
-    if archive_end < archive_size then
+    if (indexName = '') and (archive_end < archive_size) then
     begin
       if archive_end > 0 then
         TruncateFile(outName, archive_end)
@@ -1841,6 +2078,8 @@ begin
         DeleteFile(outName);
     end;
   finally
+    if idxArc <> nil then idxArc.Free;
+    if pair <> nil then pair.Free;
     outArc.Free;
     zq_buf_free(sb);
     zq_buf_free(isb);
