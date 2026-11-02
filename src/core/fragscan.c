@@ -70,3 +70,50 @@ zq_i64 zq_frag_scan(const zq_u8 *buf, zq_i64 n, zq_fragscan *st,
   st->sz = sz;
   return n;
 }
+
+/* Fill one chain entry: offset, length, hits, order-1 table and SHA-1. */
+static void fragcut_fill(zq_fragcut *c, const zq_u8 *base, zq_i64 start,
+                         zq_i64 end, const zq_fragscan *st) {
+  zq_sha1 sha;
+  c->start = start;
+  c->len = end - start;
+  c->hits = st->hits;
+  memcpy(c->o1, st->o1, sizeof(c->o1));
+  zq_sha1_init(&sha);
+  zq_sha1_write(&sha, (const char *)base + start, c->len);
+  memcpy(c->sha1, zq_sha1_result(&sha), 20);
+}
+
+/* Append the chain that a scanner starting fresh at `from` finds, up to `cap`
+ * fragments.  See zq.h for the contract. */
+int zq_frag_chain(const zq_u8 *base, zq_i64 from, zq_i64 fine, zq_i64 stop_at,
+                  int dopo, zq_i64 maxfrag, zq_i64 minfrag, int fragment,
+                  zq_fragcut *out, int cap, int *done, zq_fragcut *open) {
+  zq_i64 pos = from;
+  int n = 0;
+  int after = 0; /* fragments that ended at or after stop_at */
+
+  *done = 0;
+  for (;;) {
+    zq_fragscan st;
+    const zq_i64 start = pos;
+    int cut = 0;
+
+    zq_fragscan_init(&st);
+    while (pos < fine) {
+      pos += zq_frag_scan(base + pos, fine - pos, &st, maxfrag, minfrag,
+                          fragment, &cut);
+      if (cut) break;
+    }
+    if (!cut) { /* the fragment from `start` is still open at fine */
+      *done = 1;
+      if (open) fragcut_fill(open, base, start, fine, &st);
+      return n;
+    }
+    if (n < cap) fragcut_fill(&out[n], base, start, pos, &st);
+    ++n;
+    if (n >= cap) return n;
+    if (pos >= stop_at) ++after;
+    if (dopo > 0 && after >= dopo) return n;
+  }
+}

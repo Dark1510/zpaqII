@@ -164,6 +164,34 @@ typedef struct zq_fragscan {
   zq_u8  o1[256]; /* order-1 model: context -> predicted byte */
 } zq_fragscan;
 
+/* ------------------------------------------------------------------ */
+/* Fragment chains (the parallel fragmenter)                           */
+/* ------------------------------------------------------------------ */
+
+/* One complete fragment of a scanned chain.  Layout chosen so the host can
+ * read it as a record without marshalling; keep in sync with zqcore.pas. */
+typedef struct zq_fragcut {
+  zq_i64 start;   /* offset of the fragment in the buffer */
+  zq_i64 len;     /* its length */
+  zq_u32 hits;    /* order-1 prediction hits */
+  zq_u8  o1[256]; /* order-1 table at its end */
+  zq_u8  sha1[20];/* its SHA-1, already computed */
+} zq_fragcut;
+
+/* Scan a chain of fragments starting fresh at `from`.
+ *
+ * Writes up to `cap` complete fragments to `out` and stops when the scan
+ * reaches `fine` (*done = 1) or when `dopo` fragments that end at or after
+ * `stop_at` have been produced (*done = 0): the caller uses that overlap to
+ * stitch the chain of one range into the chain of the previous one.
+ *
+ * Returns the number of fragments written.  The fragment still open when the
+ * scan stops at `fine` is NOT written unless `open` is not NULL, in which case
+ * its start, length, hits, order-1 table and SHA-1 are stored there. */
+int zq_frag_chain(const zq_u8 *base, zq_i64 from, zq_i64 fine, zq_i64 stop_at,
+                  int dopo, zq_i64 maxfrag, zq_i64 minfrag, int fragment,
+                  zq_fragcut *out, int cap, int *done, zq_fragcut *open);
+
 void  zq_fragscan_init(zq_fragscan *st);
 /* Consume up to n bytes of buf.  Returns the number consumed; *cut is set to 1
  * when the fragment ended there.  The caller resets with zq_fragscan_init for

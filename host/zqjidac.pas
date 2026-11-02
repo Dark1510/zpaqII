@@ -95,6 +95,7 @@ type
     newpassword: string;     { -repack F [X]: new key digest ('' = none) }
     methodSet: Boolean;      { -method given (rejected with -repack -all) }
     threads: Integer;        { -tN: compression threads, 0 = one per CPU }
+    turbo: Integer;          { -turbo N: fragmenter threads, 0 = as -t, <0 = off }
     indexName: string;       { -index F: index archive used by add/extract }
     dhsize: Int64;           { total size of D blocks according to H blocks }
     dcsize: Int64;           { total size of D blocks according to C blocks }
@@ -225,6 +226,25 @@ type
 
   TCompPool = class;
 
+  { ---- Parallel fragmenter (-turbo) ------------------------------------
+    One worker scans one range of a batch starting from scratch.  Its chain is
+    adopted by the serial stitcher the moment it meets a real fragment boundary
+    of the true chain, so the archive does not depend on the thread count. }
+
+  TFragThread = class(TThread)
+  private
+    fBase: PAnsiChar;
+    fFrom, fFine, fStop, fMax, fMin: Int64;
+    fFragment, fDopo, fCap, fCount, fDone: Integer;
+    fOut: PZqFragcut;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(base: PAnsiChar; from_, fine, stop_at, maxf, minf: Int64;
+                       fragment, dopo, cap: Integer; outbuf: PZqFragcut);
+    property Count: Integer read fCount;
+  end;
+
   TCompWorker = class(TThread)
   private
     fPool: TCompPool;
@@ -310,6 +330,32 @@ begin
   Result.ctx := Pointer(k);
 end;
 
+constructor TFragThread.Create(base: PAnsiChar; from_, fine, stop_at, maxf,
+                               minf: Int64; fragment, dopo, cap: Integer;
+                               outbuf: PZqFragcut);
+begin
+  inherited Create(True);      { start it with Start }
+  FreeOnTerminate := False;
+  fBase := base;
+  fFrom := from_;
+  fFine := fine;
+  fStop := stop_at;
+  fMax := maxf;
+  fMin := minf;
+  fFragment := fragment;
+  fDopo := dopo;
+  fCap := cap;
+  fOut := outbuf;
+  fCount := 0;
+  fDone := 0;
+end;
+
+procedure TFragThread.Execute;
+begin
+  fCount := zq_frag_chain(fBase, fFrom, fFine, fStop, fDopo, fMax, fMin,
+                          fFragment, fOut, fCap, @fDone, nil);
+end;
+
 constructor TCompWorker.Create(p: TCompPool);
 begin
   inherited Create(True);       { suspended until Start }
@@ -319,8 +365,7 @@ end;
 
 procedure TCompWorker.Execute;
 var
-  s: TCompSlot;
-begin
+  s: TCompSlot;begin
   while True do
   begin
     fPool.fWork.WaitFor(INFINITE);
@@ -736,6 +781,7 @@ begin
   password := pass;
   version := ver_;
   cmdDate := 0;
+  turbo := 0;      { -turbo: 0 = as -t, < 0 = off }
   SetLength(ht, 1);   { element 0 is not used, like upstream }
   FillChar(ht[0], SizeOf(THT), 0);
   SetLength(blocks, 0);
@@ -2831,6 +2877,9 @@ var
   idxInit: Boolean;
   pool: TCompPool;
   nthreads: Integer;
+  turboThreads: Integer;
+  turboMin: Int64;
+  sEnv: string;
   pair: TWriterPair;
   wpw: TZqWriter;
   idxSalt: array[0..31] of AnsiChar;
@@ -2845,6 +2894,332 @@ var
   ok: Boolean;
 const
   ON = 4;
+
+  { One fragment, complete: dedupe against the archive, analysis, block
+    decisions and table update.  Shared by the streaming path and by the
+    parallel fragmenter so both go through exactly the same code. }
+  procedure EmitFragment(data: PAnsiChar; fsz: Int64; fhits: Cardinal;
+                         o1src: PByte; fsha: PAnsiChar);
+  var
+    hh: Cardinal;
+    k: Integer;
+  begin
+    htptr := 0;
+    if fi < vf.Count then htptr := htinv.Find(ht, fsha);
+
+    if htptr = 0 then
+    begin
+      { Analyze the fragment: text, exe, redundancy }
+      text1 := 0;
+      exe1 := 0;
+      h1 := fsz;
+      FillChar(o1ct, SizeOf(o1ct), 0);
+      for k := 0 to 255 do
+      begin
+        if o1ct[o1src[k]] < 255 then
+        begin
+          Dec(h1, (fsz * ZQ_RED_DT[o1ct[o1src[k]]]) shr 15);
+          Inc(o1ct[o1src[k]]);
+        end;
+        if (o1src[k] = Ord(' ')) and
+           (((k >= Ord('0')) and (k <= Ord('9'))) or
+            ((k >= Ord('A')) and (k <= Ord('Z'))) or
+            ((k >= Ord('a')) and (k <= Ord('z'))) or
+            (k = Ord('.')) or (k = Ord(','))) then Inc(text1);
+        if (o1src[k] <> 0) and ((k < 9) or (k = 11) or (k = 12) or
+           ((k >= 14) and (k <= 31)) or (k >= 240)) then Dec(text1);
+        if (k >= 192) and (k < 240) and (o1src[k] <> 0) and
+           ((o1src[k] < 128) or (o1src[k] >= 192)) then Dec(text1);
+        if o1src[k] = 139 then Inc(exe1);
+      end;
+      if text1 >= 3 then text1 := 1 else text1 := 0;
+      if exe1 >= 5 then exe1 := 1 else exe1 := 0;
+      if fsz > 0 then h1 := h1 * h1 div fsz;
+      hh := fhits;
+      h2 := Cardinal(h1);
+      if h2 > hh then hh := h2;
+      h2 := o1ct[0] * Cardinal(fsz) div 256;
+      if h2 > hh then hh := h2;
+      h2 := 0;
+      for k := 0 to 256 * ON - 1 do
+        if o1prev[k] = o1src[k and 255] then Inc(h2);
+      h2 := h2 * Cardinal(fsz) div (256 * ON);
+      if h2 > hh then hh := h2;
+      if hh > fsz then hh := Cardinal(fsz);
+
+      { Should a new block start here? }
+      newblock := False;
+      if (frags > 0) and (fj = 0) and (fi < vf.Count) then
+      begin
+        esize := TEdtEntry(vf.Objects[fi]).size;
+        newsize := Int64(zq_buf_size(sb)) + esize + (esize shr 14) + 4096 +
+                   Int64(frags) * 4;
+        if (newsize > blocksize div 4) and
+           (Int64(redundancy) < Int64(zq_buf_size(sb)) div 128) then
+          newblock := True;
+        if newblock then
+        begin
+          ct := 0;
+          for k := 0 to 256 * ON - 1 do
+            if (o1prev[k] <> 0) and (o1prev[k] = o1src[k and 255]) then
+              Inc(ct);
+          if ct > ON * 2 then newblock := False;
+        end;
+        if newsize >= blocksize then newblock := True;
+      end;
+      if Int64(zq_buf_size(sb)) + fsz + 80 + Int64(frags) * 4 >= blocksize then
+        newblock := True;
+      if fi = vf.Count then newblock := True;
+      if frags < 1 then newblock := False;
+
+      if newblock then
+      begin
+        for k := Length(ht) - Int64(frags) to Length(ht) - 1 do
+          PutI(sb, ht[k].usize, 4);
+        PutI(sb, 0, 4);
+        PutI(sb, frags, 4);
+        m2 := m;
+        if (m[1] >= '0') and (m[1] <= '9') then
+          m2 := m2 + ',' +
+                Itos(Int64(redundancy) div (Int64(zq_buf_size(sb)) div 256 + 1)) +
+                ',' + Itos(Ord(exe > frags) * 2 + Ord(text > frags));
+        PrintProgress(total_size, total_done, summary);
+        if summary <= 0 then
+          WriteLn('[', Length(ht) - Int64(frags), '..',
+                  Int64(Length(ht)) - 1, '] ', zq_buf_size(sb),
+                  ' -method ', m2);
+        fn := 'jDC' + Itos(date, 14) + 'd' +
+              Itos(Length(ht) - Int64(frags), 10);
+        SetLength(blocklist, Length(blocklist) + 1);
+        blocklist[High(blocklist)] := Length(ht) - Int64(frags);
+        if pool <> nil then
+        begin
+          { Keep the ring full; writing happens in submission order. }
+          if pool.Queued >= pool.Slots then
+          begin
+            csizeOne := pool.FlushOne(w);
+            SetLength(csize, Length(csize) + 1);
+            csize[High(csize)] := csizeOne;
+          end;
+          pool.Submit(sb, m2, fn, jdcComment);
+        end
+        else
+        begin
+          hp := outArc.Tell();
+          if zq_compress_block(sb, w, PAnsiChar(AnsiString(m2)),
+                               PAnsiChar(AnsiString(fn)),
+                               PAnsiChar(jdcComment), 1) < 0 then
+            raise Exception.Create(string(zq_last_error));
+          csizeOne := outArc.Tell() - hp;
+          SetLength(csize, Length(csize) + 1);
+          csize[High(csize)] := csizeOne;
+          zq_buf_resize(sb, 0);
+        end;
+        frags := 0;
+        redundancy := 0;
+        text := 0;
+        exe := 0;
+        FillChar(o1prev, SizeOf(o1prev), 0);
+      end;
+
+      if fsz > 0 then zq_buf_write(sb, data, LongInt(fsz));
+      Inc(frags);
+      Inc(redundancy, hh);
+      Inc(exe, Cardinal(exe1) * 4);
+      Inc(text, Cardinal(text1) * 2);
+      if fsz >= minFrag then
+      begin
+        Move(o1prev[256], o1prev[0], 256 * (ON - 1));
+        Move(o1src[0], o1prev[256 * (ON - 1)], 256);
+      end;
+    end;
+
+    if fi < vf.Count then
+    begin
+      if htptr = 0 then
+      begin
+        htptr := Cardinal(Length(ht));
+        SetLength(ht, Length(ht) + 1);
+        Move(fsha^, ht[High(ht)].sha1[0], 20);
+        ht[High(ht)].usize := fsz;
+        ht[High(ht)].csize := 0;
+        htinv.Update(ht);
+        Inc(fsize, fsz);
+      end;
+      SetLength(e.ptr, Length(e.ptr) + 1);
+      e.ptr[High(e.ptr)] := htptr;
+    end;
+  end;
+
+  { -turbo: cut and hash one file in several threads.
+    The batch is split into ranges; every worker scans its range from scratch
+    and the serial stitcher adopts a worker's chain the moment it meets a real
+    fragment boundary, so the fragments (and the archive) are exactly the ones
+    the single-threaded loop produces. }
+  procedure AddFileTurbo(stream: TStream; npieces: Integer);
+  const
+    BATCH = Int64(64) shl 20;   { bytes read per batch }
+  var
+    buf: PAnsiChar;
+    capMax, capChain, np, k, nt, idx, curN, prossimo: Integer;
+    lo, hi, mid, nread, extraN, tailN, dummy: Integer;
+    batchLen, carry, fine, e: Int64;
+    allEof: Boolean;
+    inizi: array of Int64;
+    lists: array of TZqFragcut;
+    counts: array of Integer;
+    chain: array of TZqFragcut;
+    workers: array of TFragThread;
+    cur: PZqFragcut;
+    finoafine: Boolean;
+    extra, tail: TZqFragcut;
+    zerotab: array[0..255] of Byte;
+  begin
+    FillChar(zerotab, SizeOf(zerotab), 0);
+    if npieces > 16 then npieces := 16;
+    capMax := Integer(BATCH div npieces div minFrag) + 64;
+    if capMax < 64 then capMax := 64;
+    capChain := Integer(BATCH div minFrag) + 128;
+    SetLength(lists, Int64(capMax) * npieces);
+    SetLength(counts, npieces);
+    SetLength(inizi, npieces + 1);
+    SetLength(chain, capChain);
+    SetLength(workers, npieces);
+    buf := GetMem(BATCH + maxFrag + 64);
+    try
+      carry := 0;
+      allEof := False;
+      while not allEof do
+      begin
+        { read a batch after the open fragment carried from the last one }
+        batchLen := 0;
+        while batchLen < BATCH do
+        begin
+          nread := stream.Read((buf + carry + batchLen)^, BATCH - batchLen);
+          if nread <= 0 then Break;
+          Inc(batchLen, nread);
+        end;
+        allEof := batchLen < BATCH;
+        fine := carry + batchLen;
+
+        { pieces: keep them large enough to pay for the threads }
+        np := npieces;
+        while (np > 1) and (fine < Int64(np) shl 20) do Dec(np);
+        for k := 0 to np do inizi[k] := fine * k div np;
+
+        { workers for pieces 1..np-1, piece 0 in this thread }
+        for k := 1 to np - 1 do
+        begin
+          workers[k] := TFragThread.Create(buf, inizi[k], fine, inizi[k + 1],
+                                           maxFrag, minFrag, fragment, 3, capMax,
+                                           @lists[k * capMax]);
+          workers[k].Start;
+        end;
+        if np > 1 then
+          counts[0] := zq_frag_chain(buf, 0, fine, inizi[1], 3, maxFrag, minFrag,
+                                     fragment, @lists[0], capMax, @dummy, nil)
+        else
+          counts[0] := zq_frag_chain(buf, 0, fine, fine, 0, maxFrag, minFrag,
+                                     fragment, @lists[0], capMax, @dummy, nil);
+        for k := 1 to np - 1 do
+        begin
+          workers[k].WaitFor;
+          counts[k] := workers[k].Count;
+          workers[k].Free;
+        end;
+
+        { stitch: follow the true chain, adopting a worker chain when it
+          starts exactly where the true one has arrived }
+        nt := 0;
+        e := 0;
+        cur := @lists[0];
+        idx := 0;
+        curN := counts[0];
+        finoafine := (np = 1);
+        prossimo := 1;
+        while True do
+        begin
+          if idx >= curN then
+          begin
+            if finoafine then Break;
+            { no meeting yet: one more fragment of the true chain, serially }
+            extraN := zq_frag_chain(buf, e, fine, e, 1, maxFrag, minFrag,
+                                    fragment, @extra, 1, @dummy, nil);
+            if extraN = 0 then Break;
+            cur := @extra;
+            idx := 0;
+            curN := extraN;
+          end;
+          if nt < capChain then
+          begin
+            chain[nt] := cur[idx];
+            Inc(nt);
+          end;
+          e := cur[idx].start + cur[idx].len;
+          Inc(idx);
+          while (prossimo < np) and (e >= inizi[prossimo]) do
+          begin
+            lo := 0;
+            hi := counts[prossimo];
+            while lo < hi do
+            begin
+              mid := (lo + hi) div 2;
+              if PZqFragcut(@lists[prossimo * capMax])[mid].start < e then
+                lo := mid + 1
+              else
+                hi := mid;
+            end;
+            if (lo < counts[prossimo]) and
+               (PZqFragcut(@lists[prossimo * capMax])[lo].start = e) then
+            begin
+              cur := @lists[prossimo * capMax];
+              idx := lo;
+              curN := counts[prossimo];
+              finoafine := (prossimo = np - 1);
+              Inc(prossimo);
+            end
+            else if (prossimo + 1 < np) and (e >= inizi[prossimo + 1]) then
+              Inc(prossimo)
+            else
+              Break;
+          end;
+        end;
+
+        { end of the file: everything from e to fine, and the open fragment
+          itself (upstream emits it even when it is empty) }
+        if allEof then
+        begin
+          tailN := zq_frag_chain(buf, e, fine, fine, 0, maxFrag, minFrag,
+                                 fragment, @chain[nt], capChain - nt,
+                                 @dummy, @tail);
+          Inc(nt, tailN);
+        end;
+
+        for k := 0 to nt - 1 do
+        begin
+          Inc(total_done, chain[k].len);
+          EmitFragment(buf + chain[k].start, chain[k].len, chain[k].hits,
+                       @chain[k].o1[0], @chain[k].sha1[0]);
+          Inc(fj);
+        end;
+        if allEof then
+        begin
+          Inc(total_done, tail.len);
+          EmitFragment(buf + tail.start, tail.len, tail.hits, @tail.o1[0],
+                       @tail.sha1[0]);
+          Inc(fj);
+        end
+        else
+        begin
+          carry := fine - e;
+          if carry > 0 then Move((buf + e)^, buf^, carry);
+        end;
+      end;
+    finally
+      FreeMem(buf);
+    end;
+  end;
+
 begin
   errors := 0;
   Result := 0;
@@ -3117,6 +3492,7 @@ begin
 
     { Parallel compression: block boundaries and the method string are decided
       here, so the archive is identical for any thread count. }
+    nthreads := 1;
     if threads <> 1 then
     begin
       nthreads := threads;
@@ -3127,6 +3503,21 @@ begin
         pool.Start;
       end;
     end;
+
+    { -turbo: cut and hash large files in several threads.  The fragments are
+      the same ones the serial loop finds, so this is a speed knob only.
+      turbo < 0 (=-noturbo) disables it, turbo = 0 follows -t. }
+    turboThreads := 0;
+    if turbo >= 0 then
+    begin
+      turboThreads := turbo;
+      if turboThreads = 0 then turboThreads := nthreads;
+      if turboThreads > 16 then turboThreads := 16;
+      if turboThreads < 2 then turboThreads := 0;
+    end;
+    turboMin := Int64(4) shl 20;
+    sEnv := GetEnvironmentVariable('ZPAQII_TURBO_MIN');  { test hook }
+    if sEnv <> '' then turboMin := StrToInt64(sEnv);
 
     { Placeholder transaction header }
     PutI(isb, -1, 8);
@@ -3165,6 +3556,11 @@ begin
       end;
       fsize := 0;
       fj := 0;
+      if (fi < vf.Count) and (turboThreads > 1) and
+         (TEdtEntry(vf.Objects[fi]).size >= turboMin) then
+        AddFileTurbo(dst, turboThreads)
+      else
+      begin
       while True do
       begin
         sz := 0;
@@ -3172,7 +3568,6 @@ begin
         { Upstream starts this pass with c=EOF, so the synthetic pass at
           fi = vf.Count (which only flushes the last block) runs once. }
         eof := fi >= vf.Count;
-        htptr := 0;
         FillChar(o1, 256, 0);
         if fi < vf.Count then
         begin
@@ -3209,152 +3604,14 @@ begin
           { One call per fragment instead of one per byte. }
           if sz > 0 then zq_sha1_write(sha, fragbuf, sz);
           Move(zq_sha1_result(sha)^, sha1result[0], 20);
-          htptr := htinv.Find(ht, @sha1result[0]);
         end;
 
-        if htptr = 0 then
-        begin
-          { Analyze the fragment: text, exe, redundancy }
-          text1 := 0;
-          exe1 := 0;
-          h1 := sz;
-          FillChar(o1ct, SizeOf(o1ct), 0);
-          for i := 0 to 255 do
-          begin
-            if o1ct[o1[i]] < 255 then
-            begin
-              Dec(h1, (sz * ZQ_RED_DT[o1ct[o1[i]]]) shr 15);
-              Inc(o1ct[o1[i]]);
-            end;
-            if (o1[i] = Ord(' ')) and
-               (((i >= Ord('0')) and (i <= Ord('9'))) or
-                ((i >= Ord('A')) and (i <= Ord('Z'))) or
-                ((i >= Ord('a')) and (i <= Ord('z'))) or
-                (i = Ord('.')) or (i = Ord(','))) then Inc(text1);
-            if (o1[i] <> 0) and ((i < 9) or (i = 11) or (i = 12) or
-               ((i >= 14) and (i <= 31)) or (i >= 240)) then Dec(text1);
-            if (i >= 192) and (i < 240) and (o1[i] <> 0) and
-               ((o1[i] < 128) or (o1[i] >= 192)) then Dec(text1);
-            if o1[i] = 139 then Inc(exe1);
-          end;
-          if text1 >= 3 then text1 := 1 else text1 := 0;
-          if exe1 >= 5 then exe1 := 1 else exe1 := 0;
-          if sz > 0 then h1 := h1 * h1 div sz;
-          h2 := Cardinal(h1);
-          if h2 > hits then hits := h2;
-          h2 := o1ct[0] * Cardinal(sz) div 256;
-          if h2 > hits then hits := h2;
-          h2 := 0;
-          for i := 0 to 256 * ON - 1 do
-            if o1prev[i] = o1[i and 255] then Inc(h2);
-          h2 := h2 * Cardinal(sz) div (256 * ON);
-          if h2 > hits then hits := h2;
-          if hits > sz then hits := Cardinal(sz);
-
-          { Should a new block start here? }
-          newblock := False;
-          if (frags > 0) and (fj = 0) and (fi < vf.Count) then
-          begin
-            esize := TEdtEntry(vf.Objects[fi]).size;
-            newsize := Int64(zq_buf_size(sb)) + esize + (esize shr 14) + 4096 +
-                       Int64(frags) * 4;
-            if (newsize > blocksize div 4) and
-               (Int64(redundancy) < Int64(zq_buf_size(sb)) div 128) then
-              newblock := True;
-            if newblock then
-            begin
-              ct := 0;
-              for i := 0 to 256 * ON - 1 do
-                if (o1prev[i] <> 0) and (o1prev[i] = o1[i and 255]) then Inc(ct);
-              if ct > ON * 2 then newblock := False;
-            end;
-            if newsize >= blocksize then newblock := True;
-          end;
-          if Int64(zq_buf_size(sb)) + sz + 80 + Int64(frags) * 4 >= blocksize then
-            newblock := True;
-          if fi = vf.Count then newblock := True;
-          if frags < 1 then newblock := False;
-
-          if newblock then
-          begin
-            for i := Length(ht) - Int64(frags) to Length(ht) - 1 do
-              PutI(sb, ht[i].usize, 4);
-            PutI(sb, 0, 4);
-            PutI(sb, frags, 4);
-            m2 := m;
-            if (m[1] >= '0') and (m[1] <= '9') then
-              m2 := m2 + ',' +
-                    Itos(Int64(redundancy) div (Int64(zq_buf_size(sb)) div 256 + 1)) +
-                    ',' + Itos(Ord(exe > frags) * 2 + Ord(text > frags));
-            PrintProgress(total_size, total_done, summary);
-            if summary <= 0 then
-              WriteLn('[', Length(ht) - Int64(frags), '..',
-                      Int64(Length(ht)) - 1, '] ', zq_buf_size(sb),
-                      ' -method ', m2);
-            fn := 'jDC' + Itos(date, 14) + 'd' +
-                  Itos(Length(ht) - Int64(frags), 10);
-            SetLength(blocklist, Length(blocklist) + 1);
-            blocklist[High(blocklist)] := Length(ht) - Int64(frags);
-            if pool <> nil then
-            begin
-              { Keep the ring full; writing happens in submission order. }
-              if pool.Queued >= pool.Slots then
-              begin
-                csizeOne := pool.FlushOne(w);
-                SetLength(csize, Length(csize) + 1);
-                csize[High(csize)] := csizeOne;
-              end;
-              pool.Submit(sb, m2, fn, jdcComment);
-            end
-            else
-            begin
-              hp := outArc.Tell();
-              if zq_compress_block(sb, w, PAnsiChar(AnsiString(m2)),
-                                   PAnsiChar(AnsiString(fn)),
-                                   PAnsiChar(jdcComment), 1) < 0 then
-                raise Exception.Create(string(zq_last_error));
-              csizeOne := outArc.Tell() - hp;
-              SetLength(csize, Length(csize) + 1);
-              csize[High(csize)] := csizeOne;
-              zq_buf_resize(sb, 0);
-            end;
-            frags := 0;
-            redundancy := 0;
-            text := 0;
-            exe := 0;
-            FillChar(o1prev, SizeOf(o1prev), 0);
-          end;
-
-          if sz > 0 then zq_buf_write(sb, fragbuf, LongInt(sz));
-          Inc(frags);
-          Inc(redundancy, hits);
-          Inc(exe, Cardinal(exe1) * 4);
-          Inc(text, Cardinal(text1) * 2);
-          if sz >= minFrag then
-          begin
-            Move(o1prev[256], o1prev[0], 256 * (ON - 1));
-            Move(o1[0], o1prev[256 * (ON - 1)], 256);
-          end;
-        end;
-
-        if fi < vf.Count then
-        begin
-          if htptr = 0 then
-          begin
-            htptr := Cardinal(Length(ht));
-            SetLength(ht, Length(ht) + 1);
-            Move(sha1result[0], ht[High(ht)].sha1[0], 20);
-            ht[High(ht)].usize := sz;
-            ht[High(ht)].csize := 0;
-            htinv.Update(ht);
-            Inc(fsize, sz);
-          end;
-          SetLength(e.ptr, Length(e.ptr) + 1);
-          e.ptr[High(e.ptr)] := htptr;
-        end;
+        EmitFragment(fragbuf, sz, hits, @o1[0], @sha1result[0]);
         if eof then Break;
         Inc(fj);
       end;
+      end;
+
       if fi < vf.Count then
       begin
         Inc(dedupesize, fsize);

@@ -92,6 +92,24 @@ function zq_frag_scan(buf: PAnsiChar; n: Int64; st: PZqFragscan;
                       maxfrag, minfrag: Int64; fragment: LongInt;
                       cut: PInteger): Int64; cdecl; external;
 
+{ A complete fragment of a scanned chain (parallel fragmenter).  Must match
+  struct zq_fragcut in include/zq.h byte for byte. }
+type
+  TZqFragcut = record
+    start: Int64;
+    len: Int64;
+    hits: Cardinal;
+    o1: array[0..255] of Byte;
+    sha1: array[0..19] of Byte;
+  end;
+  PZqFragcut = ^TZqFragcut;
+
+function zq_frag_chain(base: PAnsiChar; from_, fine, stop_at: Int64;
+                       dopo: LongInt; maxfrag, minfrag: Int64;
+                       fragment: LongInt; outbuf: PZqFragcut; cap: LongInt;
+                       done: PInteger; open: PZqFragcut): LongInt; cdecl;
+  external;
+
 { --- AES / key stretching / random --- }
 function zq_aes_new(key: PAnsiChar; keylen: LongInt; iv: PAnsiChar): TZqAes; cdecl; external;
 procedure zq_aes_free(a: TZqAes); cdecl; external;

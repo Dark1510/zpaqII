@@ -31,7 +31,7 @@ BUILD    := build$(if $(DEBUG),-debug,)$(if $(NOJIT),-nojit,)
 CORE_SRC := $(wildcard src/core/*.c)
 CORE_OBJ := $(patsubst src/core/%.c,$(BUILD)/obj/%.o,$(CORE_SRC))
 
-.PHONY: all lib test test-e1 test-sha1hw oracle clean info
+.PHONY: all lib test test-e1 test-sha1hw test-fragchain oracle clean info
 
 all: lib test
 
@@ -52,7 +52,7 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h src/core/zq_internal.h
 
 # ---------------- tests ----------------
 
-test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c test-e18 test-e6d test-sha1hw
+test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c test-e18 test-e6d test-sha1hw test-fragchain
 	@echo "== E1 (hash/AES/scrypt): OK =="
 	@echo "== E2 (ZPAQL VM + compiler): OK =="
 	@echo "== E3 (predictor + coder): OK =="
@@ -61,7 +61,8 @@ test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c test-e1
 	@echo "== E5 (Pascal host: streaming + journaling add/extract): OK =="
 	@echo "== E6a (differential fuzzing): OK =="
 
-test-e1: $(BUILD)/vectors_e1 $(BUILD)/e1_oracle	@$(BUILD)/vectors_e1 > $(BUILD)/e1_core.txt
+test-e1: $(BUILD)/vectors_e1 $(BUILD)/e1_oracle
+	@$(BUILD)/vectors_e1 > $(BUILD)/e1_core.txt
 	@$(BUILD)/e1_oracle > $(BUILD)/e1_upstream.txt
 	@diff -u $(BUILD)/e1_upstream.txt $(BUILD)/e1_core.txt && echo "E1: identical to the oracle ($$(wc -l < $(BUILD)/e1_core.txt) cases)"
 
@@ -76,6 +77,13 @@ $(BUILD)/e1_oracle: tools/oracle/e1_dump.cpp
 # Hardware SHA-1 (x86 SHA extensions) against the portable one.  On a CPU
 # without SHA-NI this only reports that there is nothing to compare; run it
 # under qemu -cpu max to exercise the hardware path (also part of `make test`).
+test-fragchain: $(BUILD)/fragchain
+	@$(BUILD)/fragchain
+
+$(BUILD)/fragchain: tests/unit/fragchain.c $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
+
 test-sha1hw: $(BUILD)/sha1_hw
 	@$(BUILD)/sha1_hw
 	@if [ "$$(uname -m)" = x86_64 ] && command -v qemu-x86_64 >/dev/null 2>&1; then \

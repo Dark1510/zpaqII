@@ -631,6 +631,7 @@ var
   summary: Integer;
   dotest, noattrs: Boolean;
   allver: Integer;
+  turboVal: Integer;
   tmp: TJidac;
   errs2: Integer;
   nfiles2: Cardinal;
@@ -667,6 +668,7 @@ begin
   dateVal := 0;
   force := False;
   frag := 6;
+  turboVal := 0;
   GThreads := 0;
   summary := 0;
   nottype := '';
@@ -750,6 +752,19 @@ begin
           allver := StrToIntDef(ParamStr(i), 4);
         end;
       end
+      else if (a = '-turbo') then
+      begin
+        { our extension: fragmenter threads; alone = as -t }
+        turboVal := 0;
+        if (i < ParamCount) and (ParamStr(i + 1) <> '') and
+           (ParamStr(i + 1)[1] >= '0') and (ParamStr(i + 1)[1] <= '9') then
+        begin
+          Inc(i);
+          turboVal := StrToIntDef(ParamStr(i), 0);
+        end;
+      end
+      else if (a = '-noturbo') then
+        turboVal := -1
       else if (a = '-noattributes') then
         noattrs := True
       else if (a = '-test') then
@@ -867,6 +882,7 @@ begin
         jadd.noattributes := noattrs;
         jadd.summary := summary;
         jadd.threads := GThreads;
+        jadd.turbo := turboVal;
         jadd.indexName := indexName;
         for i := 0 to files.Count - 1 do jadd.files.Add(files[i]);
         for i := 0 to tofiles.Count - 1 do jadd.tofiles.Add(tofiles[i]);

@@ -83,6 +83,23 @@ if diff <(cd au && "$Z" l al.zpaq -t1 2>&1 | norm) \
   bad "alias l"
 fi
 
+# ---- -turbo: the parallel fragmenter must not change a byte ----
+mkdir -p tb
+head -c 3000000 /dev/urandom > tb/big1.bin
+head -c 1000000 /dev/urandom > tb/small1.bin
+rm -f tu.zpaq tp.zpaq tn.zpaq
+FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add tu.zpaq tb -m1 -t1 >/dev/null 2>&1
+ZPAQII_NOW=$NOW ZPAQII_TURBO_MIN=1 "$P" add tp.zpaq tb -m1 -turbo 4 >/dev/null 2>&1
+ZPAQII_NOW=$NOW "$P" add tn.zpaq tb -m1 -noturbo >/dev/null 2>&1
+if cmp -s tu.zpaq tp.zpaq; then ok; else bad "-turbo archive"; fi
+if cmp -s tp.zpaq tn.zpaq; then ok; else bad "-turbo vs -noturbo"; fi
+rm -rf xu xo
+mkdir xu xo
+"$Z" x tu.zpaq -to xu -t1 >/dev/null 2>&1
+"$P" x tp.zpaq -to xo >/dev/null 2>&1
+if diff -r xu xo >/dev/null 2>&1; then ok; else bad "-turbo extract"; fi
+rm -rf tb
+
 # ---- -to: single target, several targets, prefix rename ----
 extract_both() { # tag, args...
   local tag=$1

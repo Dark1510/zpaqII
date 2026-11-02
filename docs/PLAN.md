@@ -808,3 +808,49 @@ the hardware path is exercised under `qemu-x86_64 -cpu max`:
 ARMv8 crypto extensions are detected (`ZQ_CPU_SHA1`) but the ARM64 block
 function is not written yet: ARM64 uses the portable path for now, which is
 byte-identical and only slower.
+
+## 2.1c: parallel fragmenter (`-turbo`)
+
+Cutting and hashing a large file was still a single-threaded job: one fragment
+at a time, and its SHA-1 right after.  `-turbo` splits a file into batches
+(64 MiB) and each batch into as many ranges as fragmenter threads, then puts
+the ranges back into one chain.
+
+How the chain is rebuilt without changing a byte:
+
+* A range worker starts scanning at *its* range start with a fresh state, so
+  the cuts it finds are only correct if that point happens to be a real
+  fragment boundary.
+* Piece 0 is scanned in the main thread and is correct by construction.
+* The stitcher follows the true chain; when it reaches the start of range *k*
+  it looks for a fragment of that worker's chain beginning **exactly** at the
+  current position.  A match proves the worker's state was the true state from
+  that boundary on, so its chain is adopted from there.  Without a match the
+  stitcher scans one more fragment serially and tries again.
+* Each chain entry carries start, length, `hits`, the order-1 table and the
+  fragment's SHA-1, so the main thread only deduplicates and assembles blocks.
+* The fragment that is still open at the end of a batch is carried over to the
+  front of the next one; at real EOF it is emitted as the last fragment even
+  when it is empty (upstream starts that pass with `c = EOF`).
+
+Options: `-turbo [N]` (N fragmenter threads; alone follows `-t`) and
+`-noturbo`.  The default follows `-t`, so a single-threaded `add` is unchanged.
+Only files of at least 4 MiB are split, and the threshold can be lowered with
+`ZPAQII_TURBO_MIN` (a test hook, not a documented option).
+
+200 MB of random data, `taskset -c 0-7`, min of 3:
+
+| case | before | after |
+|---|---|---|
+| `add -m1 -t1` (serial scanner) | 1.30 s | 1.30 s |
+| `add -m1 -t8 -noturbo` | — | 1.16 s |
+| `add -m1 -t8` (turbo) | 2.34 s (old `-t8`) | **0.82 s** |
+| `add -m0 -t8` (turbo) | 2.25 s (old `-t8`) | **0.92 s** |
+
+Upstream 7.15 on the same 200 MB: 2.80 s (`-m1 -t1`).
+
+Checks: `tests/cli.sh` adds a 3 MB + 1 MB corpus and requires the `-turbo`
+archive, the `-noturbo` archive and upstream's to be the same file, and the
+extraction to match (118 checks).  Also verified by hand on files that end
+exactly on a `maxfrag` cut (the empty trailing fragment) and on a 70 MB file
+that crosses a batch boundary.
