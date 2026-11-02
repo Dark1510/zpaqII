@@ -125,6 +125,10 @@ let the oracle (upstream) validate each piece as early as possible.
 - `asm/coder_x86_64.S` and `asm/model_x86_64.S`: inner loops (see §4).
 - **Acceptance:** per-bit trace of `p` and `c0` identical to the oracle on all 5
   levels; decode oracle blocks bit for bit; encoded streams byte-identical.
+- **Status:** predictor (all 9 component types) + coder ✅ — 13 models compared:
+  512-byte prediction traces (4608 byte traces), encoded stream bytes and
+  decoder round trip, all identical to the upstream interpreter. ASM kernels
+  pending.
 
 ### E4 — Container and high-level API (C)
 - `decompresser.c` (findBlock, headers, HCOMP/PCOMP, SHA-1 verify, memory),

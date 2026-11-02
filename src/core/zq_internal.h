@@ -4,10 +4,16 @@
  * ZPAQL, StateTable, Component, Predictor, Decoder/Encoder, PostProcessor,
  * Decompresser, Compressor, Compiler.  Shared only between .c modules.
  */
-#ifndef ZQ_INTERNAL_H
-#define ZQ_INTERNAL_H 1
+#ifndef ZPAQII_ZQ_INTERNAL_H
+#define ZPAQII_ZQ_INTERNAL_H 1
 
 #include "zq.h"
+
+/* Component types (libzpaq::CompType) */
+enum {
+  ZQ_NONE = 0, ZQ_CONS = 1, ZQ_CM = 2, ZQ_ICM = 3, ZQ_MATCH = 4,
+  ZQ_AVG = 5, ZQ_MIX2 = 6, ZQ_MIX = 7, ZQ_ISSE = 8, ZQ_SSE = 9
+};
 
 /* ------------------------------------------------------------------ */
 /* ZPAQL                                                               */
@@ -26,13 +32,14 @@ typedef struct zq_zpaql {
   int bufptr;
   zq_u32 a, b, c, d;
   int f, pc;
-  zq_u8 *rcode;         /* codigo JIT (NULL si interprete) */
+  zq_u8 *rcode;         /* JIT code (NULL when interpreting) */
   int rcode_size;
 } zq_zpaql;
 
 /* Exact equivalents of Array::operator() (masked index) and
  * Array::operator[] (direct index). */
-#define ZQ_HDR(z, i)  (((zq_u8 *)(z)->header.data)[(i)])
+#define ZQ_HDR(z, i)   (((zq_u8 *)(z)->header.data)[(i)])
+#define ZQ_U16A(a, i)  (((zq_u16 *)(a)->data)[(i)])
 #define ZQ_M(z, i)    (((zq_u8 *)(z)->m.data)[(i) & ((int)(z)->m.n - 1)])
 #define ZQ_H(z, i)    (((zq_u32 *)(z)->h.data)[(i) & ((int)(z)->h.n - 1)])
 #define ZQ_R(z, i)    (((zq_u32 *)(z)->r.data)[(i)])
@@ -52,7 +59,103 @@ void zq_zpaql_outc(zq_zpaql *z, int ch);
 int zq_zpaql_execute(zq_zpaql *z);   /* one instruction; 0 after HALT */
 
 /* ------------------------------------------------------------------ */
-/* Components and compressor                                           */
+/* State table and model components                                    */
+/* ------------------------------------------------------------------ */
+
+typedef struct zq_state_table {
+  zq_u8 ns[1024];   /* state*4 -> next state if 0, if 1, n0, n1 */
+} zq_state_table;
+
+void zq_st_init(zq_state_table *st);
+static inline int zq_st_next(const zq_state_table *st, int state, int y) {
+  return st->ns[state * 4 + y];
+}
+int zq_st_cminit(const zq_state_table *st, int state);
+
+typedef struct zq_component {
+  size_t limit;
+  size_t cxt;
+  size_t a, b, c;
+  zq_arr cm;    /* U32 */
+  zq_arr ht;    /* U8 */
+  zq_arr a16;   /* U16 */
+} zq_component;
+
+void zq_component_init(zq_component *cr);
+
+/* ------------------------------------------------------------------ */
+/* Predictor                                                           */
+/* ------------------------------------------------------------------ */
+
+typedef struct zq_predictor {
+  int c8;                 /* last 0..7 bits */
+  int hmap4;              /* c8 split into nibbles */
+  int p[256];             /* predictions */
+  zq_u32 h[256];          /* unrolled copy of z->h */
+  zq_zpaql *z;            /* VM that computes context hashes (H, n) */
+  zq_component comp[256]; /* the model */
+  int initTables;         /* are the lookup tables initialized? */
+  int dt2k[256];          /* division table for MATCH */
+  int dt[1024];           /* division table for CM */
+  zq_u16 squasht[4096];   /* squash() lookup table */
+  short stretcht[32768];  /* stretch() lookup table */
+  zq_state_table st;
+  zq_u8 *pcode;           /* JIT code for predict()/update() */
+  int pcode_size;
+} zq_predictor;
+
+extern const zq_u8  zq_sns[1024];
+extern const int    zq_sdt2k[256];
+extern const int    zq_sdt[1024];
+extern const zq_u16 zq_ssquasht[1344];
+extern const zq_u8  zq_stdt[712];
+
+void zq_pred_open(zq_predictor *pr, zq_zpaql *z);
+void zq_pred_init(zq_predictor *pr);
+void zq_pred_free(zq_predictor *pr);
+int  zq_pred_is_modeled(const zq_predictor *pr);
+int  zq_pred_predict(zq_predictor *pr);      /* 0..4095 */
+void zq_pred_update(zq_predictor *pr, int y);
+size_t zq_pred_find(zq_predictor *pr, zq_arr *ht, int sizebits, zq_u32 cxt);
+
+/* ------------------------------------------------------------------ */
+/* Coder                                                               */
+/* ------------------------------------------------------------------ */
+
+typedef struct zq_decoder {
+  zq_reader *in;
+  zq_u32 low, high, curr;
+  zq_u32 rpos, wpos;
+  zq_predictor pr;
+  zq_u8 *buf;      /* input buffer, 1<<16 bytes */
+  zq_u32 bufn;
+} zq_decoder;
+
+void zq_dec_open(zq_decoder *d, zq_zpaql *z);
+void zq_dec_close(zq_decoder *d);
+void zq_dec_init_block(zq_decoder *d);
+int  zq_dec_get(zq_decoder *d);
+int  zq_dec_decode(zq_decoder *d, int p);
+int  zq_dec_decompress(zq_decoder *d);
+int  zq_dec_skip(zq_decoder *d);
+int  zq_dec_buffered(const zq_decoder *d);
+
+typedef struct zq_encoder {
+  zq_writer *out;
+  zq_u32 low, high;
+  zq_predictor pr;
+  zq_u8 *buf;      /* unmodeled input, 1<<16 bytes */
+  zq_u32 bufn;
+} zq_encoder;
+
+void zq_enc_open(zq_encoder *e, zq_zpaql *z);
+void zq_enc_close(zq_encoder *e);
+void zq_enc_init_block(zq_encoder *e);
+void zq_enc_encode(zq_encoder *e, int y, int p);
+void zq_enc_compress(zq_encoder *e, int c);   /* c is 0..255 or -1 (EOS) */
+
+/* ------------------------------------------------------------------ */
+/* Compiler                                                            */
 /* ------------------------------------------------------------------ */
 
 /* Size in bytes of each component by type (libzpaq::compsize). */
@@ -66,4 +169,4 @@ extern const char *const zq_opcodelist[272];
 void zq_compile(const char *in, int *args, zq_zpaql *hz, zq_zpaql *pz,
                 zq_writer *out2);
 
-#endif
+#endif /* ZPAQII_ZQ_INTERNAL_H */

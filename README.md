@@ -15,7 +15,7 @@ criterion.
 | E0 | infrastructure, oracle (upstream build), corpus | ✅ |
 | E1 | SHA-1, SHA-256, AES-256-CTR, scrypt/stretchKey, random | ✅ identical to oracle (357 cases) |
 | E2 | ZPAQL VM + config compiler | ✅ identical (bytecode and traces); JIT pending |
-| E3 | predictor, arithmetic coder | in progress |
+| E3 | predictor, arithmetic coder | ✅ identical (13 models, 4608 byte traces, encoder bytes); asm kernels pending |
 | E4 | container, postprocessors, LZ77/BWT, makeConfig | pending |
 | E5 | JIDAC archiver in Pascal | pending |
 | E6 | bit-exact matrix, fuzzing, performance | pending |

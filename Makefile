@@ -52,13 +52,15 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h
 
 # ---------------- tests ----------------
 
-test: test-e1 test-e2
+test: test-e1 test-e2 test-e3
 	@echo "== E1 (hash/AES/scrypt): OK =="
+	@echo "== E2 (ZPAQL VM + compiler): OK =="
+	@echo "== E3 (predictor + coder): OK =="
 
 test-e1: $(BUILD)/vectors_e1 $(BUILD)/e1_oracle
 	@$(BUILD)/vectors_e1 > $(BUILD)/e1_core.txt
 	@$(BUILD)/e1_oracle > $(BUILD)/e1_upstream.txt
-	@diff -u $(BUILD)/e1_upstream.txt $(BUILD)/e1_core.txt && echo "E1: identico al oraculo ($$(wc -l < $(BUILD)/e1_core.txt) casos)"
+	@diff -u $(BUILD)/e1_upstream.txt $(BUILD)/e1_core.txt && echo "E1: identical to the oracle ($$(wc -l < $(BUILD)/e1_core.txt) cases)"
 
 $(BUILD)/vectors_e1: tests/unit/vectors_e1.c $(BUILD)/libzqcore.a
 	@mkdir -p $(BUILD)
@@ -71,7 +73,7 @@ $(BUILD)/e1_oracle: tools/oracle/e1_dump.cpp
 test-e2: $(BUILD)/zpaql_dump $(BUILD)/e2_oracle
 	@$(BUILD)/e2_oracle $(BUILD)/e2_manifest.txt $(BUILD)/e2_upstream.txt
 	@$(BUILD)/zpaql_dump $(BUILD)/e2_manifest.txt $(BUILD)/e2_core.txt
-	@diff -u $(BUILD)/e2_upstream.txt $(BUILD)/e2_core.txt && echo "E2: identico al oraculo ($$(grep -c '^RESULT' $(BUILD)/e2_core.txt) configs)"
+	@diff -u $(BUILD)/e2_upstream.txt $(BUILD)/e2_core.txt && echo "E2: identical to the oracle ($$(grep -c '^RESULT' $(BUILD)/e2_core.txt) configs)"
 
 $(BUILD)/zpaql_dump: tests/unit/zpaql_dump.c $(BUILD)/libzqcore.a
 	@mkdir -p $(BUILD)
@@ -80,6 +82,21 @@ $(BUILD)/zpaql_dump: tests/unit/zpaql_dump.c $(BUILD)/libzqcore.a
 $(BUILD)/e2_oracle: tools/oracle/e2_dump.cpp
 	@mkdir -p $(BUILD)
 	$(CXX) -O2 -Dunix -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
+
+test-e3: $(BUILD)/predictor_dump $(BUILD)/e3_oracle
+	@$(BUILD)/e3_oracle $(BUILD)/e3_manifest.txt $(BUILD)/e3_upstream.txt
+	@$(BUILD)/predictor_dump $(BUILD)/e3_manifest.txt $(BUILD)/e3_core.txt
+	@diff -u $(BUILD)/e3_upstream.txt $(BUILD)/e3_core.txt && echo "E3: identical to the oracle ($$(grep -c '^RESULT' $(BUILD)/e3_core.txt) models, $$(grep -c '^P ' $(BUILD)/e3_core.txt) byte traces)"
+
+$(BUILD)/predictor_dump: tests/unit/predictor_dump.c $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
+
+# The E3 oracle is built with -DNOJIT so it measures the interpreter path that
+# the port implements; JIT equivalence is tested separately.
+$(BUILD)/e3_oracle: tools/oracle/e3_dump.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) -O2 -Dunix -DNOJIT -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
 
 oracle: $(UPSTREAM)/zpaq
 
