@@ -1,6 +1,6 @@
 # zpaqII
 
-**zpaqII is the spiritual successor to zpaq.** It starts as a port of
+**zpaqII is the direct spiritual successor to zpaq.** It starts as a port of
 **zpaq 7.15** (github.com/zpaq/zpaq, Unlicense) to **Pascal + C + x86-64
 assembly** — bit-exact compatibility with the original being the acceptance
 criterion for everything that exists today — and then carries the archiver
