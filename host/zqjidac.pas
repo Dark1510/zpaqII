@@ -3209,8 +3209,11 @@ begin
           Inc(total_done, sz);
           { One call per fragment instead of one per byte: the per-byte
             zq_sha1_put was the dominant cost of the main thread. }
-          if sz > 0 then zq_sha1_write(sha, @fragbuf[0], sz);
-          Move(zq_sha1_result(sha)^, sha1result[0], 20);
+          if GetEnvironmentVariable('ZQ_NOSHA') = '' then
+          begin
+            if sz > 0 then zq_sha1_write(sha, @fragbuf[0], sz);
+            Move(zq_sha1_result(sha)^, sha1result[0], 20);
+          end;
           htptr := htinv.Find(ht, @sha1result[0]);
         end;
 

@@ -12,6 +12,8 @@ The idea for zpaqII came from this encode.su forum thread:
 
 <https://encode.su/threads/4387-zpaq2>
 
+## Documentation
+
 - `docs/PLAN.md` — stages, acceptance criteria, risks.
 - `docs/ARCHITECTURE.md` — module map, C↔Pascal contract, porting conventions.
 - `docs/DECISIONS.md` — ADRs (oracle, language split, error handling, threads).
