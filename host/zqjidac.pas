@@ -70,6 +70,7 @@ type
                        osb: TZqBuf; out bad: Boolean): Boolean;
     procedure ScanInto(edt: TStringList; const name: string);
   public
+    fBlockMem: Double;       { memory used by the last block decompressed }
     fBlockFiles: array of array of Integer;
     fNeedCount: array of Cardinal;
     archive: string;
@@ -1581,7 +1582,8 @@ begin
     inArc.Seek(blocks[nb].offset, 0);
     rd := InputReader(inArc);
     zq_d_set_input(d, rd);
-    rc := zq_d_find_block(d, nil);
+    fBlockMem := 0;
+    rc := zq_d_find_block(d, @fBlockMem);
     if rc <= 0 then Exit;
     nw := NameSinkWriter(fnameSink);
     rc := zq_d_find_filename(d, @nw);
@@ -1847,6 +1849,25 @@ begin
   Result := 0;
 end;
 
+{ Open an output file like upstream's fopen: on failure print "<path>: <error>"
+  (printerr) and return nil.  create=True truncates, otherwise it must exist. }
+function OpenOut(const path: string; create: Boolean): TStream;
+var
+  h: THandle;
+begin
+  Result := nil;
+  if create then
+    h := fpOpen(PChar(path), O_RDWR or O_CREAT or O_TRUNC, &666)
+  else
+    h := fpOpen(PChar(path), O_RDWR, 0);
+  if h < 0 then
+  begin
+    WriteLn(StdErr, path, ': ', SysErrorMessage(fpGetErrno));
+    Exit;
+  end;
+  Result := THandleStream.Create(h);
+end;
+
 { Label the entries to extract (upstream's loop): decides dt[].data (-1 skip,
   0 extract) and prints the "="/"?" lines and the skipped count. }
 procedure TJidac.PrepareExtract(force, testOnly: Boolean;
@@ -1925,13 +1946,14 @@ var
   fn: string;
   isdir: Boolean;
   skipped, totalFiles, extracted, errors, nt: Integer;
-  totalSize, totalDone: Int64;
+  totalSize, totalDone, maxMem: Int64;
   blockFiles: array of array of Integer;
   needCount: array of Cardinal;
   boff: array of Int64;
   bdata: PAnsiChar;
-  curFile: TFileStream;
+  curFile: TStream;
   curIdx: Integer;
+  mm: Double;
   offs, q, usize2: Int64;
   bad: Boolean;
   osb: TZqBuf;
@@ -2000,6 +2022,7 @@ begin
         Inc(errors);
         Continue;
       end;
+      if fBlockMem > mm then mm := fBlockMem;
       if bad then
       begin
         WriteLn(StdErr, 'bad checksum in block ', b);
@@ -2065,11 +2088,25 @@ begin
               if not testOnly then
               begin
                 MakePath(Rename(dt[i]));
-                curFile := TFileStream.Create(Rename(dt[i]), fmCreate);
+                curFile := OpenOut(Rename(dt[i]), True);
+                if curFile = nil then
+                begin
+                  bad := True;   { reported: skip this file, keep going }
+                  curIdx := i;
+                  Break;
+                end;
               end;
             end
             else if not testOnly then
-              curFile := TFileStream.Create(Rename(dt[i]), fmOpenReadWrite);
+            begin
+              curFile := OpenOut(Rename(dt[i]), False);
+              if curFile = nil then
+              begin
+                bad := True;
+                curIdx := i;
+                Break;
+              end;
+            end;
             curIdx := i;
           end;
 
@@ -2134,7 +2171,7 @@ begin
         begin
           if errors = 0 then
           begin
-            WriteLn;
+            WriteLn(StdErr);
             WriteLn(StdErr, 'Failed (extracted/total fragments, file):');
           end;
           Inc(errors);
@@ -2143,8 +2180,12 @@ begin
       end;
     end;
     if errors > 0 then
+    begin
+      WriteLn(StdErr);
       WriteLn(StdErr, 'Extracted ', extracted - errors, ' of ', extracted,
-              ' files OK (', errors, ' errors)');
+              ' files OK (', errors, ' errors) using ',
+              Format('%1.3f', [mm / 1000000.0]), ' MB x ', nt, ' threads');
+    end;
   finally
     if curFile <> nil then curFile.Free;
     if pool <> nil then pool.Free;

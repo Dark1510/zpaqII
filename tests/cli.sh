@@ -530,6 +530,26 @@ else
   bad "extract -not output"
 fi
 
+# extract into a read-only directory: one perror line per file, keep going, 1
+rm -rf ro1 ro2
+mkdir ro1 ro2
+mkdir -p ro1/d ro2/d
+chmod 555 ro1/d ro2/d
+"$Z" extract base.zpaq -to ro1 -t1 >eu.log 2>eu.err
+ru=$?
+"$P" extract base.zpaq -to ro2 -t1 >ep.log 2>ep.err
+rp=$?
+chmod 755 ro1/d ro2/d
+if [ "$ru" = "$rp" ] &&
+   diff <(norm2 <eu.log | sed 's/ro1/roX/g') \
+        <(norm2 <ep.log | sed 's/ro2/roX/g') >/dev/null 2>&1 &&
+   diff <(norm2 <eu.err | sed 's/ro1/roX/g') \
+        <(norm2 <ep.err | sed 's/ro2/roX/g') >/dev/null 2>&1; then
+  ok
+else
+  bad "extract permission errors (rc $ru/$rp)"
+fi
+
 # list -s2: duplicates marked "^" and counted
 if diff <("$Z" list base.zpaq -s2 -t1 2>&1 | norm) \
         <("$P" list base.zpaq -s2 2>&1 | norm) >/dev/null 2>&1; then
