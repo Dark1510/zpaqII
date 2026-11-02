@@ -85,6 +85,7 @@ type
     fragment: Integer;       { -fragment N: 2^N KiB average fragment size }
     all: Integer;            { -all N: list/extract versions in N digit dirs }
     summary: Integer;        { -summary N: top N by size, -1 = fragment ids }
+    dotest: Boolean;         { -test: verify but do not write files }
     threads: Integer;        { -tN: compression threads, 0 = one per CPU }
     indexName: string;       { -index F: index archive used by add/extract }
     dhsize: Int64;           { total size of D blocks according to H blocks }
@@ -101,7 +102,7 @@ type
                         const src: string = ''): Int64;
     function List(force: Boolean): Integer;
     function Equal(dtr: TDT; const fn: string): Boolean;
-    function Extract(force: Boolean): Integer;
+    function Extract(force: Boolean; testOnly: Boolean = False): Integer;
     function Add(const addFiles: TStringList; const method: string; date: Int64;
                  force: Boolean; out errors: Integer): Integer;
     function FindBlockFor(frag: Cardinal): Integer;
@@ -725,6 +726,7 @@ begin
   fragment := 6;
   all := 0;
   summary := 0;
+  dotest := False;
   threads := 0;
   indexName := '';
   dhsize := 0;
@@ -1549,7 +1551,7 @@ begin
   end;
 end;
 
-function TJidac.Extract(force: Boolean): Integer;
+function TJidac.Extract(force: Boolean; testOnly: Boolean): Integer;
 var
   i, nb, k, nt: Integer;
   dtr: TDT;
@@ -1611,12 +1613,17 @@ begin
       if not IsSelected(dt[i], False) then Continue;
       if (dt[i] <> '') and (dt[i][Length(dt[i])] = '/') then
       begin
-        MakePath(Rename(dt[i]), dtr.date, dtr.attr);
+        if not testOnly then MakePath(Rename(dt[i]), dtr.date, dtr.attr);
         Continue;
       end;
       outPath := Rename(dt[i]);
-      MakePath(outPath);
-      fo := TFileStream.Create(outPath, fmCreate);
+      if not testOnly then
+      begin
+        MakePath(outPath);
+        fo := TFileStream.Create(outPath, fmCreate);
+      end
+      else
+        fo := nil;
       try
         for k := 0 to High(dtr.ptr) do
         begin
@@ -1678,13 +1685,13 @@ begin
             WriteLn(StdErr, 'frag=', frag, ' nb=', nb, ' cur=', curBlock,
                     ' ofsFrag=', ofsFrag, ' off=', offsetInBlock,
                     ' size=', ht[frag].usize);
-          if ht[frag].usize > 0 then
+          if (not testOnly) and (ht[frag].usize > 0) then
             fo.Write((blockData + offsetInBlock)^, ht[frag].usize);
         end;
       finally
-        fo.Free;
+        if fo <> nil then fo.Free;
       end;
-      CloseFileAttrs(outPath, dtr.date, dtr.attr);
+      if not testOnly then CloseFileAttrs(outPath, dtr.date, dtr.attr);
     end;
   finally
     if pool <> nil then pool.Free;

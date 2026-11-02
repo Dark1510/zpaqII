@@ -322,7 +322,7 @@ begin
   end
   else if j.isJidac then
   begin
-    Result := j.Extract(force);
+    Result := j.Extract(force, j.dotest);
     if errors <> 0 then Result := 1;
   end
   else
@@ -386,6 +386,7 @@ var
   frag: Integer;
   nthreads: Integer;
   summary: Integer;
+  dotest: Boolean;
   tmp: TJidac;
   errs2: Integer;
   nfiles2: Cardinal;
@@ -481,6 +482,8 @@ begin
         Inc(i);
         indexName := ParamStr(i);
       end
+      else if (a = '-test') then
+        dotest := True
       else if (a = '-summary') then
       begin
         Inc(i);
@@ -576,6 +579,7 @@ begin
         jadd.indexName := indexName;
         jadd.threads := nthreads;
         jadd.summary := summary;
+        jadd.dotest := dotest;
         if jadd.version < 0 then
         begin
           { -until -N: count from the end, like upstream }

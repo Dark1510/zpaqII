@@ -243,6 +243,16 @@ listcmp "changed time" .
 listcmp "-s2" -s2
 listcmp "-summary 1" -summary 1
 listcmp "-s-1" -s-1
+
+# ---- -test: verify without writing ----
+rm -rf tst tu tp
+mkdir tst tu tp
+"$P" extract l.zpaq -to tp -test >/dev/null 2>&1
+rp=$?
+"$Z" extract l.zpaq -to tu -test -t1 >/dev/null 2>&1
+ru=$?
+if [ "$rp" = "$ru" ] && [ -z "$(ls -A tp)" ]; then ok; else bad "-test: rc or files"; fi
+if [ -z "$(ls -A tu)" ]; then ok; else bad "-test: upstream wrote files?"; fi
 cd ..
 
 # ---- -index: create an index from an archive (extract -index F) ----
@@ -342,4 +352,4 @@ if [ $fails -ne 0 ]; then
   exit 1
 fi
 echo "not covered yet (known gaps):"
-echo "  -test, -repack, -all, -noattributes, convert"
+echo "  -repack, -all, -noattributes, convert"
