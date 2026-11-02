@@ -57,6 +57,32 @@ FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add base.zpaq d -m1 -t1 >/dev/null 2>&1
 ZPAQII_NOW=$NOW "$P" add base.zpaq.port d -m1 >/dev/null 2>&1
 if cmp -s base.zpaq base.zpaq.port; then ok; else bad "base add"; fi
 
+# ---- short command aliases: a, x, l are documented abbreviations ----
+rm -rf au ao
+mkdir -p au ao
+cp -r d au/d
+cp -r d ao/d
+(cd au && FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" a al.zpaq d -m1 -t1 >/dev/null 2>&1)
+ru=$?
+(cd ao && ZPAQII_NOW=$NOW "$P" a al.zpaq d -m1 >/dev/null 2>&1)
+rp=$?
+if [ "$ru" = "$rp" ] && cmp -s au/al.zpaq ao/al.zpaq; then ok; else
+  bad "alias a (rc $ru/$rp)"
+fi
+rm -rf xu xo
+mkdir xu xo
+"$Z" x au/al.zpaq -to xu -t1 >/dev/null 2>&1
+ru=$?
+"$P" x ao/al.zpaq -to xo >/dev/null 2>&1
+rp=$?
+if [ "$ru" = "$rp" ] && diff -r xu xo >/dev/null 2>&1; then ok; else
+  bad "alias x (rc $ru/$rp)"
+fi
+if diff <(cd au && "$Z" l al.zpaq -t1 2>&1 | norm) \
+        <(cd ao && "$P" l al.zpaq 2>&1 | norm) >/dev/null 2>&1; then ok; else
+  bad "alias l"
+fi
+
 # ---- -to: single target, several targets, prefix rename ----
 extract_both() { # tag, args...
   local tag=$1
@@ -642,9 +668,11 @@ errcmp() {  # tag, args...
   shift
   rm -rf e1 e2
   mkdir e1 e2
-  (cd e1 && cp -p ../d/a.txt . 2>/dev/null; "$Z" "$@" >log 2>err)
+  (cd e1 && cp -p ../d/a.txt . 2>/dev/null
+   FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" "$@" >log 2>err)
   ru=$?
-  (cd e2 && cp -p ../d/a.txt . 2>/dev/null; "$P" "$@" >log 2>err)
+  (cd e2 && cp -p ../d/a.txt . 2>/dev/null
+   ZPAQII_NOW=$NOW "$P" "$@" >log 2>err)
   rp=$?
   if [ "$ru" = "$rp" ] &&
      diff <(norm2 <e1/log) <(norm2 <e2/log) >/dev/null 2>&1 &&

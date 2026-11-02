@@ -843,7 +843,7 @@ begin
     if (archive <> '') and (ExtractFileExt(archive) = '') then
       archive := archive + '.zpaq';
 
-    if cmd = 'add' then
+    if (cmd = 'add') or (cmd = 'a') then
     begin
       if files.Count = 0 then Fail('no files to add');
       { upstream scans into a map keyed by name: byte order, case sensitive }
