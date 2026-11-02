@@ -97,7 +97,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential make fpc gcc-mingw-w64-x86-64 \
-            fp-units-win-base fp-units-win-fcl wine64
+            fp-units-win-base fp-units-win-fcl wine
       - name: build
         run: make win64
       - name: add + extract roundtrip under wine

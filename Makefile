@@ -114,23 +114,27 @@ test-e2: $(BUILD)/zpaql_dump $(BUILD)/e2_oracle
 	@$(BUILD)/zpaql_dump $(BUILD)/e2_manifest.txt $(BUILD)/e2_core.txt
 	@diff -u $(BUILD)/e2_upstream.txt $(BUILD)/e2_core.txt && echo "E2: identical to the oracle ($$(grep -c '^RESULT' $(BUILD)/e2_core.txt) configs)"
 
-ifneq ($(NOJIT),1)
+# The JIT only exists on x86-64 with a System V ABI (see zq_internal.h); the
+# differential tests make no sense anywhere else.
+HAVE_JIT := $(if $(NOJIT),,$(filter x86_64,$(shell uname -m)))
+
+ifneq ($(HAVE_JIT),)
 test-e6c: $(BUILD)/jit_diff
 	@test -f $(BUILD)/e2_manifest.txt || $(BUILD)/e2_oracle $(BUILD)/e2_manifest.txt $(BUILD)/e2_upstream.txt
 	@$(BUILD)/jit_diff $(BUILD)/e2_manifest.txt 600 64
 	@echo "== E6c (ZPAQL JIT vs interpreter): OK =="
 else
 test-e6c:
-	@echo "== E6c (ZPAQL JIT): skipped, NOJIT=1 build =="
+	@echo "== E6c (ZPAQL JIT): skipped, no JIT on this target =="
 endif
 
-ifneq ($(NOJIT),1)
+ifneq ($(HAVE_JIT),)
 test-e18: $(BUILD)/pjit_diff
 	@$(BUILD)/pjit_diff 300 512
 	@echo "== E18 (predictor JIT vs interpreter): OK =="
 else
 test-e18:
-	@echo "== E18 (predictor JIT): skipped, NOJIT=1 build =="
+	@echo "== E18 (predictor JIT): skipped, no JIT on this target =="
 endif
 
 $(BUILD)/pjit_diff: tests/unit/pjit_diff.c $(BUILD)/libzqcore.a
