@@ -9,6 +9,16 @@
 
 #include "zq.h"
 
+/* ------------------------------------------------------------------ */
+/* CPU features (cpu.c)                                                */
+/* ------------------------------------------------------------------ */
+
+#define ZQ_CPU_SHA1 1u /* x86 SHA extensions / ARMv8 SHA-1 */
+#define ZQ_CPU_SHA2 2u /* ARMv8 SHA-256 */
+
+unsigned zq_cpu_features(void);
+
+/* ------------------------------------------------------------------ */
 /* Component types (libzpaq::CompType) */
 enum {
   ZQ_NONE = 0, ZQ_CONS = 1, ZQ_CM = 2, ZQ_ICM = 3, ZQ_MATCH = 4,

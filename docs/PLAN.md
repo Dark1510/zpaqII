@@ -777,3 +777,34 @@ The same 200 MB with upstream 7.15 at `-m1 -t1` takes 2.80 s.
 `make test` (E1-E6a) and `make test-e6d` (115 CLI checks) stay green; the
 archives are bit-identical for `-m0..-m5`, `-fragment 0..19`, empty files,
 `-t4` and large inputs.
+
+## 2.1b: hardware SHA-1 with a portable fallback
+
+`add` hashes every fragment (and every block) with SHA-1, so those rounds are
+part of the hot path.  The x86 SHA extensions do four rounds per instruction
+and expand the message schedule in parallel.
+
+* `src/core/cpu.c` answers `zq_cpu_features()` once: CPUID leaf 7 EBX bit 29
+  on x86, `AT_HWCAP` (`HWCAP_SHA1`/`HWCAP_SHA2`) on Linux ARM64,
+  `hw.optional.arm.FEAT_SHA1` on macOS, `IsProcessorFeaturePresent` on Windows
+  ARM64, and "no features" everywhere else.  Nothing is decided at build time.
+* `src/core/sha1.c` keeps the portable, upstream-shaped `sha1_process` and adds
+  `sha1_blocks_shani` (the Intel sequence, `__attribute__((target("sha,...")))`).
+  `zq_sha1_write` uses it for complete 64-byte blocks when the CPU has SHA-NI
+  and the portable loop otherwise; the tail bytes always go through `put()`.
+  Leaving the message schedule `w[]` stale after a hardware block is harmless:
+  a word is always filled by exactly four `put()` calls, which shift the old
+  contents out.
+
+Verification: this host (Xeon E5-2697A v4, Broadwell) has **no** SHA-NI, so
+the hardware path is exercised under `qemu-x86_64 -cpu max`:
+
+* `make test-sha1hw` compares both implementations: 361 lengths (0..300 and 60
+  random ones up to 1 MiB), 0 differences; it runs under qemu automatically and
+  reports "skipped" on a CPU without the extensions.
+* The 357 E1 vectors run with SHA-NI give output identical to the oracle
+  (`qemu-x86_64 -cpu max build/vectors_e1` vs `build/e1_oracle`).
+
+ARMv8 crypto extensions are detected (`ZQ_CPU_SHA1`) but the ARM64 block
+function is not written yet: ARM64 uses the portable path for now, which is
+byte-identical and only slower.
