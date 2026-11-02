@@ -30,6 +30,17 @@ The idea for zpaqII came from this encode.su forum thread:
 | E5 | JIDAC archiver in Pascal | ✅ streaming and journaling add/extract bit-identical (levels 0-5, updates, deletions, -until, -fragment, -to, -only/-not, -key, -index, multi-part, -summary, -test, -noattributes, -all, -repack); parallel -tN ✅ |
 | E6 | bit-exact matrix, fuzzing, performance | fuzzing ✅; matrix ✅; ZPAQL JIT ✅; predictor JIT ✅ (`docs/JIT.md`); performance at or above upstream on -m1..-m5, stored blocks and extraction |
 
+## Extensions beyond 7.15
+
+The archive format is still exactly 7.15's, so plain zpaq can read everything
+zpaqII writes.  Phase 2 adds behaviour, never bytes:
+
+| option | what it does |
+|---|---|
+| `-turbo [N]` / `-noturbo` | cut and hash large files in N threads (default: as `-t`). The fragments, and the archive, are the ones the serial loop produces. |
+| `-strict` | command-line errors (unknown option or command, misplaced word, missing archive, bad value) exit 2 with a message instead of 7.15's usage-and-1 or silent 0. |
+| `-715` | pin 7.15 behaviour and bytes: clears `-strict`, disables `-turbo`; whatever the argument order. |
+
 ## Build
 
 ```

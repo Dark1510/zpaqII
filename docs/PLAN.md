@@ -854,3 +854,53 @@ archive, the `-noturbo` archive and upstream's to be the same file, and the
 extraction to match (118 checks).  Also verified by hand on files that end
 exactly on a `maxfrag` cut (the empty trailing fragment) and on a 70 MB file
 that crosses a batch boundary.
+
+## 2.2a: `-strict` — exit codes that never hide a failure
+
+Decision (2026-11-02): the **default stays 7.15-exact**; the stricter behaviour
+is opt-in with `-strict`.  That keeps every differential test against upstream
+valid and leaves the port's promise intact.
+
+`-strict` turns a command line that 7.15 answers with the usage text (or with
+silence) into a clear error on stderr and exit code **2**:
+
+| command line | 7.15 | ours | ours `-strict` |
+|---|---|---|---|
+| misplaced word after a switch | usage, 1 | usage, 1 | `misplaced argument`, **2** |
+| unknown option | usage, 1 | usage, 1 | `unknown option`, **2** |
+| unknown command | usage, 1 | usage, 1 | `unknown command`, **2** |
+| command without archive | usage, 1 | usage, 1 | `no archive given`, **2** |
+| bad value for a switch | **0** (atoi) | same bytes, 0 | `needs a number`, **2** |
+
+`-strict` is detected before the argument loop, so it works even when it comes
+after the offending word; runtime failures keep their codes (upstream's
+`error()` exits 1, and a failed extract exits 2).
+
+## 2.2b: `-715` — 7.15 pinned
+
+`-715` forces 7.15 behaviour whatever else is on the line: it clears
+`-strict`, disables `-turbo` and is applied after parsing, so argument order
+does not matter.  It is the safety switch for the moment the default behaviour
+starts to evolve (2.3 and 2.4), and the mode we can always diff against the
+oracle.
+
+`tests/cli.sh` checks that `-715 -strict` behaves like 7.15 (usage + exit 1)
+and that `-715 -turbo 8` on a corpus that would use the fragmenter produces
+upstream's bytes.
+
+## 2.2c: two argument-parsing differences found on the way
+
+Both were real differences from 7.15 (the tests did not cover them):
+
+* `-fragment abc` used to mean fragment size **6** in the port (a defensive
+  default) where 7.15 uses `atoi`, i.e. **0**.  The archive differed.  Now it
+  is `StrToIntDef(s, 0)`, and `-strict` rejects it instead of guessing.
+* `-m 5` (value separated) used to be accepted; 7.15 only accepts the value
+  attached (`-m5`).  A bare `-m` now keeps the default method and the next
+  word is rejected as misplaced, which is what upstream does.
+
+Both have a check in `tests/cli.sh` (128 checks).
+
+The "compatibility level" report (which program can open this archive) is
+deferred: our archive format is still exactly 7.15's, so there is nothing to
+report until 2.3/2.4 add extensions.

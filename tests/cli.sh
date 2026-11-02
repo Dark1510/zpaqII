@@ -98,6 +98,11 @@ mkdir xu xo
 "$Z" x tu.zpaq -to xu -t1 >/dev/null 2>&1
 "$P" x tp.zpaq -to xo >/dev/null 2>&1
 if diff -r xu xo >/dev/null 2>&1; then ok; else bad "-turbo extract"; fi
+# -715 pins 7.15: it must ignore -turbo and produce upstream's bytes
+rm -f t715.zpaq
+ZPAQII_NOW=$NOW ZPAQII_TURBO_MIN=1 "$P" add t715.zpaq tb -m1 -715 -turbo 8 \
+  >/dev/null 2>&1
+if cmp -s tu.zpaq t715.zpaq; then ok; else bad "-715 bytes"; fi
 rm -rf tb
 
 # ---- -to: single target, several targets, prefix rename ----
@@ -450,6 +455,13 @@ usagecmp "-h" -h
 usagecmp "help" help
 usagecmp "unknown option" list base.zpaq -zzz
 usagecmp "unknown command" foo bar
+usagecmp "-m with a separate value" add mx.zpaq d/a.txt -m 5
+
+# ---- a bare -m keeps the default method, like 7.15 ----
+rm -f ma.zpaq mb.zpaq
+FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add ma.zpaq d/a.txt -m -t1 >/dev/null 2>&1
+ZPAQII_NOW=$NOW "$P" add mb.zpaq d/a.txt -m >/dev/null 2>&1
+if cmp -s ma.zpaq mb.zpaq; then ok; else bad "bare -m"; fi
 
 # ---- convert: upstream parses it but has no command, so usage + exit 1 ----
 "$Z" convert base.zpaq >/dev/null 2>&1
@@ -457,6 +469,35 @@ ru=$?
 "$P" convert base.zpaq >/dev/null 2>&1
 rp=$?
 if [ "$ru" = "$rp" ]; then ok; else bad "convert rc ($ru vs $rp)"; fi
+
+# ---- -strict: command-line errors exit 2 (our extension) ----
+strict_rc() {  # tag, expected, args...
+  local tag=$1 exp=$2
+  shift 2
+  "$P" "$@" >/dev/null 2>&1
+  local r=$?
+  if [ "$r" = "$exp" ]; then ok; else bad "strict $tag (rc $r != $exp)"; fi
+}
+strict_rc "misplaced argument" 2 add s1.zpaq d/a.txt -m5 basura -strict
+strict_rc "unknown option" 2 list base.zpaq -zzz -strict
+strict_rc "unknown command" 2 foo bar -strict
+strict_rc "no archive" 2 list -strict
+strict_rc "bad value" 2 add s2.zpaq d/a.txt -fragment abc -strict
+rm -f s1.zpaq s2.zpaq
+
+# ---- -715 wins over -strict: the line behaves like 7.15 again ----
+"$P" list base.zpaq -zzz -715 -strict >/dev/null 2>&1
+rp=$?
+"$Z" list base.zpaq -zzz -t1 >/dev/null 2>&1
+ru=$?
+if [ "$rp" = "$ru" ]; then ok; else bad "-715 over -strict (rc $rp vs $ru)"; fi
+
+# ---- a bad -fragment value is atoi(0), like upstream ----
+rm -f fb1.zpaq fb2.zpaq
+FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add fb1.zpaq d/a.txt -m1 -fragment abc -t1 \
+  >/dev/null 2>&1
+ZPAQII_NOW=$NOW "$P" add fb2.zpaq d/a.txt -m1 -fragment abc >/dev/null 2>&1
+if cmp -s fb1.zpaq fb2.zpaq; then ok; else bad "-fragment abc bytes"; fi
 
 # ---- -all N: one directory per version ----
 rm -rf av

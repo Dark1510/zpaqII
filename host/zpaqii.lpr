@@ -16,6 +16,8 @@ var
   GName: AnsiString;
   GStart: Int64;
   GThreads: Integer = 0;   { -tN: 0 = auto-detect, like upstream's threads }
+  StrictMode: Boolean = False;  { -strict: command-line errors exit 2 }
+  Legacy715: Boolean = False;   { -715: pin zpaq 7.15 behaviour and bytes }
 
 { End the program: print the elapsed time like upstream (stderr) and exit.
   quiet is used for the usage paths, which upstream exits before printing it. }
@@ -41,7 +43,29 @@ procedure Usage; forward;
 procedure UsageExit;
 begin
   Usage;
-  Finish(1, True);
+  if StrictMode then Finish(2, True) else Finish(1, True);
+end;
+
+{ True when every character is a decimal digit (empty string is not). }
+function IsDigits(const s: string): Boolean;
+var
+  k: Integer;
+begin
+  Result := s <> '';
+  for k := 1 to Length(s) do
+    if (s[k] < '0') or (s[k] > '9') then Exit(False);
+end;
+
+{ A command-line problem that -strict turns into a hard error.  In 7.15 the
+  same line would print the usage (or say nothing at all) and exit 1 or 0. }
+procedure BadCommandLine(const msg: string);
+begin
+  if StrictMode then
+  begin
+    WriteLn(StdErr, 'zpaqii: ', msg);
+    Finish(2);
+  end;
+  UsageExit;
 end;
 
 type
@@ -682,6 +706,17 @@ begin
   notfiles.CaseSensitive := True;
   try
    try
+    { -strict and -715 take effect even when they come after the offending
+      argument, so a bad line is diagnosed the same way whatever the order. }
+    for i := 1 to ParamCount do
+      if ParamStr(i) = '-715' then Legacy715 := True;
+    for i := 1 to ParamCount do
+      if ParamStr(i) = '-strict' then StrictMode := True;
+    if Legacy715 then
+    begin
+      StrictMode := False;
+      turboVal := -1;
+    end;
     i := 2;
     while i <= ParamCount do
     begin
@@ -689,10 +724,16 @@ begin
       { upstream reads files only between the archive name and the first
         option; any later bare argument is a usage error }
       if (a <> '') and (a[1] = '-') then optsStarted := True;
-      if (a = '-m') or (a = '-method') then
+      if (a = '-method') then
       begin
         Inc(i);
         method := ParamStr(i);
+        methodSet := True;
+      end
+      else if (a = '-m') then
+      begin
+        { 7.15 takes the value attached (-m5); a bare -m keeps the default
+          method and leaves the next word to be rejected as misplaced }
         methodSet := True;
       end
       else if (Copy(a, 1, 2) = '-m') and (Length(a) > 2) then
@@ -765,6 +806,16 @@ begin
       end
       else if (a = '-noturbo') then
         turboVal := -1
+      else if (a = '-strict') then
+      begin
+        if not Legacy715 then StrictMode := True;
+      end
+      else if (a = '-715') then
+      begin
+        Legacy715 := True;
+        StrictMode := False;
+        turboVal := -1;
+      end
       else if (a = '-noattributes') then
         noattrs := True
       else if (a = '-test') then
@@ -791,7 +842,10 @@ begin
       else if (a = '-fragment') then
       begin
         Inc(i);
-        frag := StrToIntDef(ParamStr(i), 6);
+        { upstream uses atoi(), which is 0 for anything that is not a number }
+        frag := StrToIntDef(ParamStr(i), 0);
+        if StrictMode and not IsDigits(ParamStr(i)) then
+          BadCommandLine('-fragment needs a number: ' + ParamStr(i));
       end
       else if (a = '-key') then
       begin
@@ -814,6 +868,8 @@ begin
       else if (a <> '') and (a[1] = '-') and (Length(a) > 1) then
       begin
         { upstream warns and then prints the usage, exiting with 1 }
+        if StrictMode then
+          BadCommandLine('unknown option: ' + a);
         WriteLn('Unknown option ignored: ', a);
         UsageExit;
       end
@@ -823,7 +879,7 @@ begin
       end
       else if optsStarted then
       begin
-        UsageExit;
+        BadCommandLine('misplaced argument: ' + a);
       end
       else if not archiveSet then
       begin
@@ -837,7 +893,13 @@ begin
 
     if not archiveSet then
     begin
-      UsageExit;
+      BadCommandLine('no archive given');
+    end;
+    { -715 pins 7.15: last word, whatever else was passed }
+    if Legacy715 then
+    begin
+      StrictMode := False;
+      turboVal := -1;
     end;
     { An unknown command is rejected during parsing, before the thread count is
       resolved (upstream calls usage() from the argument loop). }
@@ -845,7 +907,7 @@ begin
        (cmd <> 'x') and (cmd <> 'list') and (cmd <> 'l') and
        (cmd <> 'convert') and (cmd <> 'c') then
     begin
-      UsageExit;
+      BadCommandLine('unknown command: ' + cmd);
     end;
     { upstream resolves the thread count right after parsing }
     if GThreads < 1 then GThreads := CPUCount;
