@@ -52,11 +52,12 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h
 
 # ---------------- tests ----------------
 
-test: test-e1 test-e2 test-e3 test-e4
+test: test-e1 test-e2 test-e3 test-e4 test-e4b
 	@echo "== E1 (hash/AES/scrypt): OK =="
 	@echo "== E2 (ZPAQL VM + compiler): OK =="
 	@echo "== E3 (predictor + coder): OK =="
 	@echo "== E4 (container + extraction): OK =="
+	@echo "== E4b (bit-exact block compression): OK =="
 
 test-e1: $(BUILD)/vectors_e1 $(BUILD)/e1_oracle
 	@$(BUILD)/vectors_e1 > $(BUILD)/e1_core.txt
@@ -117,3 +118,15 @@ $(BUILD)/extract: tests/unit/extract.c $(BUILD)/libzqcore.a
 
 test-e4: $(BUILD)/extract
 	@tests/e4.sh $(BUILD)
+
+# E4b: bit-exact block compression (port vs oracle)
+$(BUILD)/cblock: tests/unit/cblock.c $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
+
+$(BUILD)/e4_oracle: tools/oracle/e4_dump.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) -O2 -Dunix -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
+
+test-e4b: $(BUILD)/cblock $(BUILD)/e4_oracle
+	@tests/e4b.sh $(BUILD)

@@ -225,6 +225,24 @@ const char *zq_c_checksum(zq_compressor *c);
 extern const zq_u8 zq_models[299];
 
 /* ------------------------------------------------------------------ */
+/* LZ77/BWT preprocessor (libzpaq::LZBuffer) and e8e9 filter           */
+/* ------------------------------------------------------------------ */
+
+typedef struct zq_lzbuf zq_lzbuf;
+void zq_lz_open(zq_lzbuf *z, zq_buf *inbuf, int *args, const unsigned *sap);
+void zq_lz_close(zq_lzbuf *z);
+int  zq_lz_get(zq_lzbuf *z);
+int  zq_lz_read(zq_lzbuf *z, char *p, int n);
+zq_lzbuf *zq_lz_new(zq_buf *inbuf, int *args, const unsigned *sap);
+void zq_lz_free(zq_lzbuf *z);
+
+int  zq_lg(unsigned x);
+int  zq_popcount(unsigned x);
+void zq_e8e9(unsigned char *buf, int n);
+int  divsufsort(const unsigned char *T, int *SA, int n);
+int  divbwt(const unsigned char *T, unsigned char *U, int *A, int n);
+
+/* ------------------------------------------------------------------ */
 /* Compiler                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -234,6 +252,9 @@ extern const int zq_compsize[256];
 /* Component names (compname) and opcodes (opcodelist) for the Compiler. */
 extern const char *const zq_compname[256];
 extern const char *const zq_opcodelist[272];
+
+/* Method string -> config text (libzpaq::makeConfig).  Caller frees. */
+char *zq_make_config(const char *method, int args[9]);
 
 /* ZPAQL compiler (text -> bytecode).  Equivalent to libzpaq::Compiler. */
 void zq_compile(const char *in, int *args, zq_zpaql *hz, zq_zpaql *pz,
