@@ -86,6 +86,7 @@ type
     all: Integer;            { -all N: list/extract versions in N digit dirs }
     summary: Integer;        { -summary N: top N by size, -1 = fragment ids }
     dotest: Boolean;         { -test: verify but do not write files }
+    noattributes: Boolean;   { -noattributes: ignore/save attributes }
     threads: Integer;        { -tN: compression threads, 0 = one per CPU }
     indexName: string;       { -index F: index archive used by add/extract }
     dhsize: Int64;           { total size of D blocks according to H blocks }
@@ -727,6 +728,7 @@ begin
   all := 0;
   summary := 0;
   dotest := False;
+  noattributes := False;
   threads := 0;
   indexName := '';
   dhsize := 0;
@@ -1372,7 +1374,8 @@ begin
                   existing := GetDT(fn);
                   existing.date := dtr.date;
                   existing.size := 0;
-                  existing.attr := dtr.attr;
+                  if noattributes then existing.attr := 0
+                  else existing.attr := dtr.attr;
                   existing.ptr := dtr.ptr;
                   existing.data := 0;
                 end;
@@ -2084,8 +2087,9 @@ begin
       if (names[i] <> '') and (names[i][Length(names[i])] <> '/') then
         Inc(usize, lsize[i]);
       Write(st, ' ', DateToString(ldate[i]), ' ',
-            Format('%12.0f', [lsize[i] + 0.0]), ' ',
-            AttrToString(lattr[i]), ' ', names[i]);
+            Format('%12.0f', [lsize[i] + 0.0]), ' ');
+      if not noattributes then Write(AttrToString(lattr[i]), ' ');
+      Write(names[i]);
       if (summary < 0) and (lref[i] >= 0) then
       begin
         dtr := TDT(dt.Objects[lref[i]]);
@@ -2444,6 +2448,10 @@ begin
       vf.AddObject(edt[i], e);
     end;
   end;
+
+  if noattributes then
+    for i := 0 to edt.Count - 1 do
+      TEdtEntry(edt.Objects[i]).attr := 0;
 
   { Sort by sortkey, then by full path }
   i := 1;

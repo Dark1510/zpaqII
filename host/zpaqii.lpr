@@ -386,7 +386,7 @@ var
   frag: Integer;
   nthreads: Integer;
   summary: Integer;
-  dotest: Boolean;
+  dotest, noattrs: Boolean;
   tmp: TJidac;
   errs2: Integer;
   nfiles2: Cardinal;
@@ -482,6 +482,8 @@ begin
         Inc(i);
         indexName := ParamStr(i);
       end
+      else if (a = '-noattributes') then
+        noattrs := True
       else if (a = '-test') then
         dotest := True
       else if (a = '-summary') then
@@ -553,6 +555,7 @@ begin
       begin
         jadd := TJidac.Create(archive, key, DEFAULT_VERSION);
         jadd.fragment := frag;
+        jadd.noattributes := noattrs;
         jadd.threads := nthreads;
         jadd.indexName := indexName;
         for i := 0 to files.Count - 1 do jadd.files.Add(files[i]);
@@ -580,6 +583,7 @@ begin
         jadd.threads := nthreads;
         jadd.summary := summary;
         jadd.dotest := dotest;
+        jadd.noattributes := noattrs;
         if jadd.version < 0 then
         begin
           { -until -N: count from the end, like upstream }

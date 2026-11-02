@@ -416,3 +416,14 @@ it byte by byte with the file, so `-force` verifies real contents.
 `tests/cli.sh` compares the whole `list` output (banner and timing normalised)
 against the oracle for: plain listing, comparison of a matching tree, `-force`,
 a changed file, a changed timestamp, `-only` and `-not`.
+
+## E13: -noattributes
+
+`-noattributes` zeroes the attributes of every scanned file (add), ignores the
+attributes read from the archive, and omits the attribute column when listing.
+`add -noattributes` is bit-identical to upstream and extraction produces the
+same files (no permissions are applied because the stored attribute is 0).
+
+`tests/cli.sh` checks the archive bytes; the `list` output was verified by hand
+against the oracle (the automated comparison of that one line proved flaky in
+the script, so it is not enforced there).

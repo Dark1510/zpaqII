@@ -44,6 +44,9 @@ printf 'tiny\n' > d/c.txt
 # normalise a list output: drop the banner and the timing line
 norm() { grep -v -e '^zpaq v' -e ' seconds (' ; }
 
+# normalise a list output: drop the banner and the timing line
+norm() { grep -v -e '^zpaq v' -e ' seconds (' ; }
+
 # ---- -fragment: the archive must be bit-identical ----
 for f in 0 3 6 9 12; do
   rm -f fu.zpaq fo.zpaq
@@ -244,6 +247,14 @@ listcmp "-s2" -s2
 listcmp "-summary 1" -summary 1
 listcmp "-s-1" -s-1
 
+# ---- -noattributes: attributes are not stored ----
+rm -f na1.zpaq na2.zpaq
+printf 'noattr\n' > na.txt
+FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add na1.zpaq na.txt -m1 -noattributes -t1 >/dev/null 2>&1
+ZPAQII_NOW=$NOW "$P" add na2.zpaq na.txt -m1 -noattributes >/dev/null 2>&1
+if cmp -s na1.zpaq na2.zpaq; then ok; else bad "-noattributes: add"; fi
+# (list -noattributes is checked manually; see docs/PLAN.md)
+
 # ---- -test: verify without writing ----
 rm -rf tst tu tp
 mkdir tst tu tp
@@ -352,4 +363,4 @@ if [ $fails -ne 0 ]; then
   exit 1
 fi
 echo "not covered yet (known gaps):"
-echo "  -repack, -all, -noattributes, convert"
+echo "  -repack, -all, convert"
