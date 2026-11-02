@@ -1,0 +1,117 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  # Reference platform: the full differential suite against upstream 7.15.
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential g++ git make fpc python3
+      - name: oracle (upstream 7.15)
+        run: make oracle UPSTREAM=$PWD/build/upstream
+      - name: unit + differential tests
+        run: make test UPSTREAM=$PWD/build/upstream
+      - name: bit-exact matrix
+        run: make matrix UPSTREAM=$PWD/build/upstream
+      - name: CLI parity
+        run: make test-e6d UPSTREAM=$PWD/build/upstream
+
+  # Same suite on arm64.  No JIT there: the interpreter is byte-identical.
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential g++ git make fpc python3
+      - name: oracle (upstream 7.15)
+        run: make oracle UPSTREAM=$PWD/build/upstream
+      - name: unit + differential tests
+        run: make test UPSTREAM=$PWD/build/upstream
+      - name: bit-exact matrix
+        run: make matrix UPSTREAM=$PWD/build/upstream
+
+  # Everything we can cross-build from one x86-64 Linux box.
+  cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential g++ git make fpc python3 \
+            gcc-multilib gcc-aarch64-linux-gnu qemu-user \
+            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 fp-units-win-base
+      - name: oracle (upstream 7.15, for the reference output)
+        run: make oracle UPSTREAM=$PWD/build/upstream
+      - name: compile and run the core on every target
+        run: make cross UPSTREAM=$PWD/build/upstream
+      - name: Windows x86-64 build (zpaqii.exe + zqcore.dll)
+        run: make win64
+      - name: Windows x86 build (core + tests)
+        run: make win32
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: |
+            build/win64/zpaqii.exe
+            build/win64/zqcore.dll
+
+  # Run the Windows build under wine: a regression gate, not a substitute for
+  # the real-Windows check we do before releases.
+  windows-wine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential make fpc gcc-mingw-w64-x86-64 fp-units-win-base \
+            wine64
+      - name: build
+        run: make win64
+      - name: add + extract roundtrip under wine
+        env:
+          WINEDEBUG: "-all"
+          WINEPREFIX: ${{ github.workspace }}/build/wineprefix
+        run: |
+          mkdir -p build/smoke && cd build/smoke
+          printf 'uno dos tres\n' > a.txt
+          head -c 40000 /dev/urandom > b.bin
+          wine ../win64/zpaqii.exe add t.zpaq a.txt b.bin -m1
+          wine ../win64/zpaqii.exe x t.zpaq -to out
+          cmp a.txt out/a.txt
+          cmp b.bin out/b.bin
+          echo "wine roundtrip ok"
+
+  # Experimental: no macOS machine was available while this was written, so it
+  # is allowed to fail until someone runs it on a Mac.
+  macos-arm64:
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: brew install fpc || brew install --cask fpc
+      - name: build
+        run: |
+          make lib
+          make host
+      - name: core unit tests
+        run: |
+          make build/vectors_e1
+          ./build/vectors_e1 | tail -1
+          make test-fragchain

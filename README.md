@@ -1,5 +1,7 @@
 # zpaqII
 
+[![ci](https://github.com/YadeWira/zpaqII/actions/workflows/ci.yml/badge.svg)](https://github.com/YadeWira/zpaqII/actions/workflows/ci.yml)
+
 **zpaqII is the spiritual successor to zpaq.** It starts as a port of
 **zpaq 7.15** (github.com/zpaq/zpaq, Unlicense) to **Pascal + C + x86-64
 assembly** — bit-exact compatibility with the original being the acceptance
