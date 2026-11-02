@@ -996,3 +996,38 @@ CRC-32, then XXH64, then SHA-256, so a failure says which one broke
 other-tool-generated list works.
 
 `tests/cli.sh` covers the three cases (137 checks).
+
+---
+
+# Phase 2.4: external codecs with a ZPAQL decoder per block
+
+The design (from `ROADMAP.md` and zpaq-std's `-ma:algo:N`): a block stores the
+payload compressed by a native codec **and** a decoder written in ZPAQL inside
+the block, so plain zpaq 7.15 can still extract it — only slower, running the
+ZPAQL — while we use a native fast path.
+
+## 2.4a: the LZ4 block format in the core
+
+`src/core/lz4.c` implements the LZ4 **block** format (the one in lz4.c by Yann
+Collet, not the frame format): our own encoder and decoder, no dependency on
+liblz4 at build time.
+
+It is the first codec for three reasons: its decoder is small enough to be
+written in ZPAQL, the format is simple enough to get right, and the reference
+library is available to cross-check the bytes.
+
+`make test-lz4` (86 cases):
+
+* roundtrip over sizes from 0 to 300 KB, with random, repetitive and
+  sequential data;
+* **the reference `LZ4_decompress_safe` reads what we write**, and we read
+  what `LZ4_compress_default` writes (when `pkg-config` finds liblz4; the test
+  still runs without it);
+* truncated and corrupted blocks are rejected instead of crashing.
+
+Two format rules the encoder had to learn the hard way: the last five bytes are
+always literals and a match may not start within the last twelve, or
+`LZ4_decompress_safe` rejects the block.
+
+Next: the ZPAQL decoder for this format, the block framing (`comp 0 0 ph pm 0`,
+stored payload + PCOMP), and the `-ma:lz4[:N]` switch.
