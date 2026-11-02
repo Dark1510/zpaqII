@@ -474,3 +474,17 @@ sizes are unknown), which the port reproduces.
 the oracle for: plain repack, `-all`, a new key (with `FAKE_RANDOM`), keeping
 the key, a round trip through extraction, the `-all` partial-copy rejection and
 an existing output file (76 checks).
+
+## E17: argument order
+
+Upstream reads the file list only between the archive name and the first
+option: any bare argument after an option prints the usage message and exits
+with 1.  The port accepted files anywhere on the command line; it now follows
+the same rule.
+
+An empty archive name (`zpaq add "" files`) is a dry run in upstream (the
+calculation runs, nothing is written) and is now accepted, while a missing
+archive still prints usage.  No `.zpaq` suffix is appended to an empty name.
+
+`tests/cli.sh` checks that a file after an option is rejected by both and that
+the empty-archive dry run matches (78 checks).

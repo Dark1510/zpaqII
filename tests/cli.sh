@@ -384,6 +384,24 @@ mkdir ay az
 if diff -r ay az >/dev/null 2>&1; then ok; else bad "-all 2 extract"; fi
 cd ..
 
+# ---- argument order: files are read only between the archive and the options ----
+rm -rf ag1 ag2
+mkdir ag1 ag2
+(cd ag1 && cp ../d/a.txt . && "$Z" add a.zpaq -m1 a.txt >log 2>&1); ru=$?
+(cd ag2 && cp ../d/a.txt . && "$P" add a.zpaq -m1 a.txt >log 2>&1); rp=$?
+if [ "$ru" = "$rp" ] && [ ! -f ag1/a.zpaq ] && [ ! -f ag2/a.zpaq ]; then
+  ok
+else
+  bad "argument order: file after an option (rc $ru/$rp)"
+fi
+(cd ag1 && "$Z" add "" a.txt >log 2>&1); ru=$?
+(cd ag2 && "$P" add "" a.txt >log 2>&1); rp=$?
+if [ "$ru" = "$rp" ] && [ ! -f ag1/.zpaq ] && [ ! -f ag2/.zpaq ]; then
+  ok
+else
+  bad "empty archive name (dry run)"
+fi
+
 # ---- -repack F [X]: rewrite the archive into a new file ----
 repack_both() {  # name, new key (may be empty), args...
   local n=$1 nk=$2

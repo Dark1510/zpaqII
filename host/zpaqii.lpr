@@ -392,7 +392,7 @@ end;
 var
   cmd, archive, method, key, indexName: string;
   repackName, newKey: string;
-  methodSet: Boolean;
+  methodSet, optsStarted, archiveSet: Boolean;
   files, tofiles, onlyfiles, notfiles: TStringList;
   nottype: string;
   i: Integer;
@@ -431,6 +431,8 @@ begin
   archive := '';
   method := '1';
   methodSet := False;
+  optsStarted := False;
+  archiveSet := False;
   repackName := '';
   newKey := '';
   key := '';
@@ -457,6 +459,9 @@ begin
     while i <= ParamCount do
     begin
       a := ParamStr(i);
+      { upstream reads files only between the archive name and the first
+        option; any later bare argument is a usage error }
+      if (a <> '') and (a[1] = '-') then optsStarted := True;
       if (a = '-m') or (a = '-method') then
       begin
         Inc(i);
@@ -568,21 +573,34 @@ begin
       end
       else if (a <> '') and (a[1] = '-') then
         Fail('unknown option ' + a)
-      else if archive = '' then
-        archive := a
+      else if optsStarted then
+      begin
+        Usage;
+        Finish(1);
+      end
+      else if not archiveSet then
+      begin
+        archive := a;
+        archiveSet := True;
+      end
       else
         files.Add(a);
       Inc(i);
     end;
 
-    if archive = '' then Fail('missing archive name');
+    if not archiveSet then
+    begin
+      Usage;
+      Finish(1);
+    end;
     if not dateSet then
     begin
       a := GetEnvironmentVariable('ZPAQII_NOW');
       if a <> '' then dateVal := DecimalTime(StrToInt64(a))
       else dateVal := DecimalTime(DateTimeToUnix(Now));
     end;
-    if ExtractFileExt(archive) = '' then archive := archive + '.zpaq';
+    if (archive <> '') and (ExtractFileExt(archive) = '') then
+      archive := archive + '.zpaq';
 
     if cmd = 'add' then
     begin
