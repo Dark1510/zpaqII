@@ -168,11 +168,15 @@ let the oracle (upstream) validate each piece as early as possible.
     `-until`, `list`, and `extract` of upstream journaling archives at all levels
     (0–5), including multi-version rollback, verified against upstream's own
     extraction.
-  - Journaling `add` (fragmentation, dedup, index writing) is **not implemented
-    yet**: the CLI rejects numeric methods with a clear message. The algorithm
-    and its bit-exactness requirements (sort keys, rolling hash, HTIndex,
-    block/method selection, h/i/c blocks) are documented in the plan and in
-    the upstream reference.
+  - Journaling `add` ✅: content-defined fragmentation (rolling hash with
+    `-fragment 6` default), SHA-1 dedup via `HTIndex`, block/method selection
+    from redundancy/text/exe statistics, `h`/`i`/`c` blocks, header rewrite and
+    truncation. Verified **bit-identical** to `zpaq -t1` for levels 0–5,
+    explicit `x` methods, multi-file adds, directory trees, a second update
+    with dedup, and a deletion (using a frozen clock: `FAKE_TIME` LD_PRELOAD
+    shim for upstream, `ZPAQII_NOW` for the port).
+  - Still missing in the host: `-index`, `-fragment`, multi-part output,
+    encryption in `add`, `-not`/`-only`/`-to` renames, and threads.
 
 ### E6 — Full verification and performance
 - `tests/matrix.sh`: cross matrix, both directions × levels × methods × options.

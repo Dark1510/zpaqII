@@ -6,7 +6,7 @@
 program zpaqii;
 {$mode objfpc}{$H+}
 
-uses SysUtils, Classes, zqcore, zqfile, zqarchive, zqjidac;
+uses SysUtils, DateUtils, Classes, zqcore, zqfile, zqarchive, zqjidac;
 
 const
   VERSION = 'zpaqII 0.1';
@@ -295,6 +295,10 @@ var
   i: Integer;
   a: string;
   untilVer: Int64;
+  dateVal: Int64;
+  jadd: TJidac;
+  errs, rc: Integer;
+  dateSet: Boolean;
   force: Boolean;
 
 begin
@@ -315,6 +319,8 @@ begin
   toDir := '.';
   key := '';
   untilVer := DEFAULT_VERSION;
+  dateSet := False;
+  dateVal := 0;
   force := False;
   files := TStringList.Create;
   try
@@ -327,6 +333,13 @@ begin
         Inc(i);
         method := ParamStr(i);
       end
+      else if (Copy(a, 1, 2) = '-m') and (Length(a) > 2) then
+        method := Copy(a, 3, MaxInt)
+      else if (Copy(a, 1, 2) = '-t') and (Length(a) > 2) and
+              (a[3] >= '0') and (a[3] <= '9') then
+        { single-threaded: -tN accepted and ignored }
+      else if (a = '-threads') then
+        Inc(i)
       else if (a = '-to') then
       begin
         Inc(i);
@@ -344,6 +357,12 @@ begin
         Inc(i);
         untilVer := ParseUntil(ParamStr(i));
       end
+      else if (a = '-date') then
+      begin
+        Inc(i);
+        dateVal := ParseUntil(ParamStr(i));
+        dateSet := True;
+      end
       else if (a <> '') and (a[1] = '-') then
         Fail('unknown option ' + a)
       else if archive = '' then
@@ -359,12 +378,31 @@ begin
     if cmd = 'add' then
     begin
       if files.Count = 0 then Fail('no files to add');
-      if (method = '') or (method[1] <> 's') then
-        Fail('journaling add is not implemented yet; use -method s...');
       { upstream scans into a map keyed by name: byte order, case sensitive }
       files.CaseSensitive := True;
       files.Sort;
-      Halt(AddStreaming(archive, method, files));
+      if (method <> '') and (method[1] = 's') then
+        Halt(AddStreaming(archive, method, files));
+      if not dateSet then
+      begin
+        { testing hook: ZPAQII_NOW freezes the clock (unix seconds) }
+        a := GetEnvironmentVariable('ZPAQII_NOW');
+        if a <> '' then
+          dateVal := DecimalTime(StrToInt64(a))
+        else
+          dateVal := DecimalTime(DateTimeToUnix(Now));
+      end;
+      begin
+        jadd := TJidac.Create(archive, key, DEFAULT_VERSION);
+        for i := 0 to files.Count - 1 do jadd.files.Add(files[i]);
+        try
+          rc := jadd.Add(files, method, dateVal, force, errs);
+          if errs <> 0 then rc := 1;
+        finally
+          jadd.Free;
+        end;
+        Halt(rc);
+      end;
     end
     else if (cmd = 'extract') or (cmd = 'x') then
       Halt(RunExtract(archive, toDir, key, False, force, untilVer))

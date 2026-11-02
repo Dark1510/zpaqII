@@ -58,7 +58,7 @@ test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5
 	@echo "== E3 (predictor + coder): OK =="
 	@echo "== E4 (container + extraction): OK =="
 	@echo "== E4b (bit-exact block compression): OK =="
-	@echo "== E5a (Pascal host, streaming archives): OK =="
+	@echo "== E5 (Pascal host: streaming + journaling add/extract): OK =="
 
 test-e1: $(BUILD)/vectors_e1 $(BUILD)/e1_oracle
 	@$(BUILD)/vectors_e1 > $(BUILD)/e1_core.txt
@@ -135,6 +135,10 @@ test-e4b: $(BUILD)/cblock $(BUILD)/e4_oracle
 # E5: Pascal host
 HOST_SRC := $(wildcard host/*.pas) host/zpaqii.lpr
 
+$(BUILD)/faketime.so: tests/tools/faketime.c
+	@mkdir -p $(BUILD)
+	$(CC) -shared -fPIC -O2 $< -o $@
+
 $(BUILD)/zpaqii: $(HOST_SRC) $(BUILD)/libzqcore.a
 	@mkdir -p $(BUILD)/host
 	$(FPC) -Mobjfpc -O2 -FU$(CURDIR)/$(BUILD)/host -Fu$(CURDIR)/host \
@@ -142,5 +146,12 @@ $(BUILD)/zpaqii: $(HOST_SRC) $(BUILD)/libzqcore.a
 
 host: $(BUILD)/zpaqii
 
-test-e5: $(BUILD)/zpaqii
+ifeq ($(DEBUG),1)
+# The ASan/UBSan core cannot be linked into the FPC binary (sanitizer runtime
+# must come first); the host is exercised by the release build.
+test-e5:
+	@echo "test-e5: skipped in DEBUG (run plain 'make test-e5')"
+else
+test-e5: $(BUILD)/zpaqii $(BUILD)/faketime.so
 	@tests/e5.sh $(BUILD)
+endif

@@ -114,3 +114,53 @@ if "$P" extract multi.zpaq -to multi.out1 -until 1 >/dev/null 2>&1 && \
 
 if [ $JFAIL -ne 0 ]; then echo "E5b: FAILURES"; exit 1; fi
 echo "E5b: journaling archives listed and extracted identically"
+
+# ---- journaling add: bit-identical to upstream with a frozen clock ----
+AF=0
+run_add() { # name method files...
+  local name=$1 m=$2; shift 2
+  local files=("$@")
+  rm -f "$name".u.zpaq "$name".o.zpaq
+  if ! FAKE_TIME=1790000000 LD_PRELOAD=../faketime.so "$Z" add "$name".u.zpaq "${files[@]}" -method "$m" -t1 >/dev/null 2>&1; then
+    echo "SKIP add $name ($m)"; return
+  fi
+  if ! ZPAQII_NOW=1790000000 "$P" add "$name".o.zpaq "${files[@]}" -method "$m" >/dev/null 2>&1; then
+    echo "FAIL add $name ($m): error"; AF=1; return
+  fi
+  if cmp -s "$name".u.zpaq "$name".o.zpaq; then
+    echo "ok   add $name ($m)"
+  else
+    echo "FAIL add $name ($m): archives differ"; AF=1
+  fi
+}
+for m in 0 1 2 3 4 5 x4.1.5.0.3.22 x4.3ci1; do
+  run_add "a-text-$m" "$m" corpus/text.txt
+  run_add "a-two-$m" "$m" corpus/text.txt corpus/bin.dat
+done
+run_add a-dir 1 corpus/text.txt corpus/bin.dat corpus/small.txt
+
+# two updates (dedup across versions) and a deletion
+rm -rf up1 up2 upd.u.zpaq upd.o.zpaq
+mkdir -p up1
+cp corpus/text.txt up1/a.txt
+cp corpus/bin.dat up1/b.txt
+FAKE_TIME=1790010000 LD_PRELOAD=../faketime.so "$Z" add upd.u.zpaq up1 -m1 -t1 >/dev/null 2>&1
+ZPAQII_NOW=1790010000 "$P" add upd.o.zpaq up1 -m1 >/dev/null 2>&1
+printf 'more data\n' >> up1/a.txt
+rm -f up1/b.txt
+FAKE_TIME=1790020000 LD_PRELOAD=../faketime.so "$Z" add upd.u.zpaq up1 -m1 -t1 >/dev/null 2>&1
+ZPAQII_NOW=1790020000 "$P" add upd.o.zpaq up1 -m1 >/dev/null 2>&1
+if cmp -s upd.u.zpaq upd.o.zpaq; then
+  echo "ok   update+deletion"
+else
+  echo "FAIL update+deletion"; AF=1
+fi
+mkdir -p upd.out
+if "$P" extract upd.o.zpaq -to upd.out >/dev/null 2>&1 && cmp -s up1/a.txt upd.out/up1/a.txt && [ ! -e upd.out/up1/b.txt ]; then
+  echo "ok   extract after update"
+else
+  echo "FAIL extract after update"; AF=1
+fi
+
+if [ $AF -ne 0 ]; then echo "E5c: FAILURES"; exit 1; fi
+echo "E5c: journaling add is bit-identical (levels 0-5, updates, deletion)"
