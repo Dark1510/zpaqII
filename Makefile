@@ -52,7 +52,7 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h
 
 # ---------------- tests ----------------
 
-test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c
+test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c test-e6d
 	@echo "== E1 (hash/AES/scrypt): OK =="
 	@echo "== E2 (ZPAQL VM + compiler): OK =="
 	@echo "== E3 (predictor + coder): OK =="
@@ -167,6 +167,10 @@ matrix: $(BUILD)/zpaqii $(BUILD)/faketime.so
 bench: $(BUILD)/zpaqii $(BUILD)/faketime.so
 	@tests/bench.sh $(BUILD)
 
+test-e6d: $(BUILD)/zpaqii $(BUILD)/faketime.so
+	@tests/cli.sh $(BUILD)
+	@echo "== E6d (CLI options): OK =="
+
 test-e6a: $(BUILD)/zpaqii
 	@python3 tests/fuzz.py $(UPSTREAM)/zpaq $(BUILD)/zpaqii $(BUILD)/fuzzwork 60
 
@@ -175,6 +179,8 @@ ifeq ($(DEBUG),1)
 # must come first); the host is exercised by the release build.
 test-e5:
 	@echo "test-e5: skipped in DEBUG (run plain 'make test-e5')"
+test-e6d:
+	@echo "test-e6d: skipped in DEBUG (run plain 'make test-e6d')"
 else
 test-e5: $(BUILD)/zpaqii $(BUILD)/faketime.so
 	@tests/e5.sh $(BUILD)

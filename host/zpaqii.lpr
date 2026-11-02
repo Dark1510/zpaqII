@@ -13,6 +13,21 @@ const
 
 var
   GName: AnsiString;
+  GStart: Int64;
+
+{ End the program: print the elapsed time like upstream (stderr) and exit. }
+procedure Finish(code: Integer);
+var
+  secs: Double;
+  state: string;
+begin
+  secs := (MTime - GStart) / 1000.0;
+  if code > 1 then state := '(with errors)'
+  else if code > 0 then state := '(with warnings)'
+  else state := '(all OK)';
+  WriteLn(StdErr, Format('%1.3f seconds %s', [secs, state]));
+  Halt(code);
+end;
 
 type
   TFileData = class
@@ -69,13 +84,40 @@ begin
   WriteLn(VERSION);
   WriteLn('Usage: zpaqii command archive[.zpaq] files... -options...');
   WriteLn('Commands: add, extract, list');
-  WriteLn('Options: -method/-m METHOD, -to DIR, -key PASSWORD');
+  WriteLn('Options: -method/-m METHOD   compress level 0..5 or explicit method');
+  WriteLn('         -to DIR...          rename files... to dir... (or all to DIR)');
+  WriteLn('         -only files...      include only these prefixes');
+  WriteLn('         -not files...       exclude these prefixes');
+  WriteLn('         -key PASSWORD       create or access an encrypted archive');
+  WriteLn('         -fragment N         average fragment size 2^N KiB (default 6)');
+  WriteLn('         -force/-f           add: re-add changed contents');
+  WriteLn('         -until N            roll back to the N-th update');
+  WriteLn('         Use * or ???? in the archive name for multi-part archives.');
+end;
+
+{ -key X: upstream uses SHA256(X) as the stretchKey password. }
+function KeyDigest(const text: string): string;
+var
+  s: TZqSha256;
+  p: PAnsiChar;
+  i: Integer;
+begin
+  s := zq_sha256_new;
+  try
+    for i := 1 to Length(text) do
+      zq_sha256_put(s, Ord(text[i]));
+    p := zq_sha256_result(s);
+    SetLength(Result, 32);
+    Move(p^, Result[1], 32);
+  finally
+    zq_sha256_free(s);
+  end;
 end;
 
 procedure Fail(const msg: string);
 begin
   WriteLn(StdErr, 'zpaqii: ' + msg);
-  Halt(1);
+  Finish(1);
 end;
 
 function ReadWholeFile(const fn: string; b: TZqBuf): Boolean;
@@ -181,7 +223,7 @@ begin
   Result := 0;
 end;
 
-function ExtractStreaming(const archive, toDir: string; listOnly: Boolean): Integer;
+function ExtractStreaming(j: TJidac; listOnly: Boolean): Integer;
 var
   inArc: TInputArchive;
   r: TZqReader;
@@ -194,7 +236,7 @@ var
   total: Int64;
   rc: Integer;
 begin
-  inArc := TInputArchive.Create(archive, '');
+  inArc := TInputArchive.Create(j.archive, j.password);
   d := zq_d_new;
   fd := nil;
   total := 0;
@@ -217,9 +259,10 @@ begin
         if zq_d_read_comment(d, nil) < 0 then Fail(string(zq_last_error));
 
         outPath := string(GName);
-        if not listOnly and (outPath <> '') then
+        if not listOnly and (outPath <> '') and
+           j.IsSelected(outPath, False) then
         begin
-          outPath := IncludeTrailingPathDelimiter(toDir) + outPath;
+          outPath := j.Rename(outPath);
           MakePath(outPath);
           if fd <> nil then FreeAndNil(fd);
           fd := TFileData.Create;
@@ -232,7 +275,7 @@ begin
         if zq_d_decompress(d, -1) < 0 then Fail(string(zq_last_error));
 
         if zq_d_read_segment_end(d, nil) < 0 then Fail(string(zq_last_error));
-        if listOnly then
+        if listOnly and j.IsSelected(string(GName), False) then
           WriteLn(GName);
       end;
     end;
@@ -244,34 +287,24 @@ begin
   Result := 0;
 end;
 
-function RunExtract(const archive, toDir, key: string; listOnly, force: Boolean;
-                    untilVer, dateVal: Int64): Integer;
+function RunExtract(j: TJidac; listOnly, force: Boolean): Integer;
 var
-  j: TJidac;
   errors: Integer;
   nfiles: Cardinal;
-  ver: Int64;
 begin
-  ver := untilVer;
-  j := TJidac.Create(archive, key, ver);
-  j.cmdDate := dateVal;
-  try
-    j.ReadArchive(errors, nfiles);
-    if listOnly then
-    begin
-      j.List;             { tolerant: works for streaming and journaling }
-      Result := 0;        { upstream list() always returns 0 }
-    end
-    else if j.isJidac then
-    begin
-      Result := j.Extract(toDir, force);
-      if errors <> 0 then Result := 1;
-    end
-    else
-      Result := ExtractStreaming(archive, toDir, False);
-  finally
-    j.Free;
-  end;
+  j.ReadArchive(errors, nfiles);
+  if listOnly then
+  begin
+    j.List;               { tolerant: works for streaming and journaling }
+    Result := 0;          { upstream list() always returns 0 }
+  end
+  else if j.isJidac then
+  begin
+    Result := j.Extract(force);
+    if errors <> 0 then Result := 1;
+  end
+  else
+    Result := ExtractStreaming(j, False);
 end;
 
 function ParseUntil(const s: string): Int64;
@@ -290,8 +323,9 @@ begin
 end;
 
 var
-  cmd, archive, method, toDir, key: string;
-  files: TStringList;
+  cmd, archive, method, key: string;
+  files, tofiles, onlyfiles, notfiles: TStringList;
+  nottype: string;
   i: Integer;
   a: string;
   untilVer: Int64;
@@ -300,30 +334,43 @@ var
   errs, rc: Integer;
   dateSet: Boolean;
   force: Boolean;
+  frag: Integer;
 
 begin
+  GStart := MTime;
+  DefaultFormatSettings.DecimalSeparator := '.';
+  WriteLn('zpaq v7.15 journaling archiver, compiled ', {$I %DATE%});
   if ParamCount < 1 then
   begin
     Usage;
-    Halt(1);
+    Finish(1);
   end;
   cmd := ParamStr(1);
   if (cmd = '-h') or (cmd = '--help') or (cmd = 'help') then
   begin
     Usage;
-    Halt(0);
+    Finish(0);
   end;
 
   archive := '';
   method := '1';
-  toDir := '.';
   key := '';
   untilVer := DEFAULT_VERSION;
   dateSet := False;
   dateVal := 0;
   force := False;
+  frag := 6;
+  nottype := '';
   files := TStringList.Create;
+  files.CaseSensitive := True;
+  tofiles := TStringList.Create;
+  tofiles.CaseSensitive := True;
+  onlyfiles := TStringList.Create;
+  onlyfiles.CaseSensitive := True;
+  notfiles := TStringList.Create;
+  notfiles.CaseSensitive := True;
   try
+   try
     i := 2;
     while i <= ParamCount do
     begin
@@ -342,15 +389,44 @@ begin
         Inc(i)
       else if (a = '-to') then
       begin
+        while (i < ParamCount) and (ParamStr(i + 1) <> '') and
+              (ParamStr(i + 1)[1] <> '-') do
+        begin
+          Inc(i);
+          tofiles.Add(ParamStr(i));
+        end;
+        if tofiles.Count = 0 then tofiles.Add('');
+      end
+      else if (a = '-only') then
+      begin
+        while (i < ParamCount) and (ParamStr(i + 1) <> '') and
+              (ParamStr(i + 1)[1] <> '-') do
+        begin
+          Inc(i);
+          onlyfiles.Add(ParamStr(i));
+        end;
+      end
+      else if (a = '-not') then
+      begin
+        while (i < ParamCount) and (ParamStr(i + 1) <> '') and
+              (ParamStr(i + 1)[1] <> '-') do
+        begin
+          Inc(i);
+          if ParamStr(i)[1] = '=' then nottype := ParamStr(i)
+          else notfiles.Add(ParamStr(i));
+        end;
+      end
+      else if (a = '-fragment') then
+      begin
         Inc(i);
-        toDir := ParamStr(i);
+        frag := StrToIntDef(ParamStr(i), 6);
       end
       else if (a = '-key') then
       begin
         Inc(i);
-        key := ParamStr(i);
+        key := KeyDigest(ParamStr(i));
       end
-      else if (a = '-force') then
+      else if (a = '-force') or (a = '-f') then
         force := True
       else if (a = '-until') then
       begin
@@ -388,7 +464,7 @@ begin
       files.CaseSensitive := True;
       files.Sort;
       if (method <> '') and (method[1] = 's') then
-        Halt(AddStreaming(archive, method, files));
+        Finish(AddStreaming(archive, method, files));
       if not dateSet then
       begin
         { testing hook: ZPAQII_NOW freezes the clock (unix seconds) }
@@ -400,6 +476,7 @@ begin
       end;
       begin
         jadd := TJidac.Create(archive, key, DEFAULT_VERSION);
+        jadd.fragment := frag;
         for i := 0 to files.Count - 1 do jadd.files.Add(files[i]);
         try
           rc := jadd.Add(files, method, dateVal, force, errs);
@@ -407,19 +484,44 @@ begin
         finally
           jadd.Free;
         end;
-        Halt(rc);
+        Finish(rc);
       end;
     end
-    else if (cmd = 'extract') or (cmd = 'x') then
-      Halt(RunExtract(archive, toDir, key, False, force, untilVer, dateVal))
-    else if (cmd = 'list') or (cmd = 'l') then
-      Halt(RunExtract(archive, toDir, key, True, force, untilVer, dateVal))
+    else if (cmd = 'extract') or (cmd = 'x') or
+            (cmd = 'list') or (cmd = 'l') then
+    begin
+      jadd := TJidac.Create(archive, key, untilVer);
+      jadd.cmdDate := dateVal;
+      try
+        for i := 0 to files.Count - 1 do jadd.files.Add(files[i]);
+        for i := 0 to tofiles.Count - 1 do jadd.tofiles.Add(tofiles[i]);
+        for i := 0 to onlyfiles.Count - 1 do jadd.onlyfiles.Add(onlyfiles[i]);
+        for i := 0 to notfiles.Count - 1 do jadd.notfiles.Add(notfiles[i]);
+        jadd.nottype := nottype;
+        if (cmd = 'list') or (cmd = 'l') then
+          Finish(RunExtract(jadd, True, force))
+        else
+          Finish(RunExtract(jadd, False, force));
+      finally
+        jadd.Free;
+      end;
+    end
     else
     begin
       Usage;
-      Halt(1);
+      Finish(1);
     end;
+   except
+    on e: Exception do
+    begin
+      WriteLn(StdErr, 'zpaq error: ', e.Message);
+      Finish(2);
+    end;
+   end;
   finally
     files.Free;
+    tofiles.Free;
+    onlyfiles.Free;
+    notfiles.Free;
   end;
 end.

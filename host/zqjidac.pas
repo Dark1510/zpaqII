@@ -66,7 +66,6 @@ type
   TJidac = class
   private
     function GetDT(const fn: string): TDT;
-    function IsSelected(const fn: string): Boolean;
     function LoadBlock(const arcName, password: string; nb: Integer;
                        osb: TZqBuf; out bad: Boolean): Boolean;
   public
@@ -78,13 +77,22 @@ type
     blocks: array of TBlockInfo;
     ver: array of TVer;
     dt: TStringList;
-    files: TStringList;   { selection prefixes, may be empty }
+    files: TStringList;      { selection prefixes, may be empty }
+    tofiles: TStringList;    { -to: rename targets (files[i] -> tofiles[i]) }
+    onlyfiles: TStringList;  { -only: include only these prefixes }
+    notfiles: TStringList;   { -not: exclude these prefixes }
+    nottype: string;         { -not =...: list chars to suppress }
+    fragment: Integer;       { -fragment N: 2^N KiB average fragment size }
+    lastOffset: Int64;       { end of the last block scanned (upstream csize) }
+    nfilesSeen: Cardinal;    { files found while scanning }
     isJidac: Boolean;
     constructor Create(const arc, pass: string; ver_: Int64);
     destructor Destroy; override;
+    function IsSelected(const fn: string; rn: Boolean): Boolean;
+    function Rename(const name: string): string;
     function ReadArchive(out errors: Integer; out nfiles: Cardinal): Int64;
-    procedure List;
-    function Extract(const destDir: string; force: Boolean): Integer;
+    function List: Integer;
+    function Extract(force: Boolean): Integer;
     function Add(const addFiles: TStringList; const method: string; date: Int64;
                  force: Boolean; out errors: Integer): Integer;
     function FindBlockFor(frag: Cardinal): Integer;
@@ -179,6 +187,16 @@ begin
   dt.Duplicates := dupIgnore;
   files := TStringList.Create;
   files.CaseSensitive := True;
+  tofiles := TStringList.Create;
+  tofiles.CaseSensitive := True;
+  onlyfiles := TStringList.Create;
+  onlyfiles.CaseSensitive := True;
+  notfiles := TStringList.Create;
+  notfiles.CaseSensitive := True;
+  nottype := '';
+  fragment := 6;
+  lastOffset := 0;
+  nfilesSeen := 0;
   isJidac := False;
 end;
 
@@ -189,6 +207,9 @@ begin
   for i := 0 to dt.Count - 1 do dt.Objects[i].Free;
   dt.Free;
   files.Free;
+  tofiles.Free;
+  onlyfiles.Free;
+  notfiles.Free;
   inherited;
 end;
 
@@ -227,16 +248,80 @@ begin
   Result := (b^ = #0) or (b^ = '/');
 end;
 
-function TJidac.IsSelected(const fn: string): Boolean;
+{ Test whether filename is selected by files, -only and -not.  When rn is
+  true the renamed name (via -to) is used for the files[] comparison, which is
+  what upstream does for list and add. }
+function TJidac.IsSelected(const fn: string; rn: Boolean): Boolean;
 var
   i: Integer;
+  matched: Boolean;
   p: AnsiString;
 begin
-  if files.Count = 0 then Exit(True);
   p := AnsiString(fn);
+  matched := True;
+  if files.Count > 0 then
+  begin
+    matched := False;
+    i := 0;
+    while (i < files.Count) and (not matched) do
+    begin
+      if rn and (i < tofiles.Count) then
+      begin
+        if IsPath(PAnsiChar(AnsiString(tofiles[i])), PAnsiChar(p)) then
+          matched := True;
+      end
+      else if IsPath(PAnsiChar(AnsiString(files[i])), PAnsiChar(p)) then
+        matched := True;
+      Inc(i);
+    end;
+  end;
+  if not matched then Exit(False);
+  if onlyfiles.Count > 0 then
+  begin
+    matched := False;
+    for i := 0 to onlyfiles.Count - 1 do
+      if IsPath(PAnsiChar(AnsiString(onlyfiles[i])), PAnsiChar(p)) then
+      begin
+        matched := True;
+        Break;
+      end;
+  end;
+  if not matched then Exit(False);
+  for i := 0 to notfiles.Count - 1 do
+    if IsPath(PAnsiChar(AnsiString(notfiles[i])), PAnsiChar(p)) then
+      Exit(False);
+  Result := True;
+end;
+
+{ a + '/' + b with a single separator (upstream append_path). }
+function AppendPath(const a, b: string): string;
+var
+  x, y: string;
+begin
+  x := a;
+  y := b;
+  if (Length(y) > 0) and (y[1] = '/') then Delete(y, 1, 1);
+  if (Length(x) > 0) and (x[Length(x)] = '/') then
+    SetLength(x, Length(x) - 1);
+  Result := x + '/' + y;
+end;
+
+{ Rename a stored name using tofiles[] (upstream Jidac::rename). }
+function TJidac.Rename(const name: string): string;
+var
+  i, n, fl: Integer;
+begin
+  if (files.Count = 0) and (tofiles.Count > 0) then
+    Exit(AppendPath(tofiles[0], name));
+  n := Length(name);
   for i := 0 to files.Count - 1 do
-    if IsPath(PAnsiChar(AnsiString(files[i])), PAnsiChar(p)) then Exit(True);
-  Result := False;
+  begin
+    if i >= tofiles.Count then Break;
+    fl := Length(files[i]);
+    if (fl <= n) and (files[i] = Copy(name, 1, fl)) then
+      Exit(tofiles[i] + Copy(name, fl + 1, MaxInt));
+  end;
+  Result := name;
 end;
 
 function TJidac.GetDT(const fn: string): TDT;
@@ -344,6 +429,17 @@ begin
   lastfile := archive;
   if Copy(lastfile, Length(lastfile) - 4, 5) = '.zpaq' then
     SetLength(lastfile, Length(lastfile) - 5);
+  if not FileExistsUTF8(SubPart(archive, 1)) then
+  begin
+    WriteLn(StdErr, archive, ' not found.');
+    Inc(errors);
+    Result := 0;
+    Exit;
+  end;
+  Write(archive);
+  if version = DEFAULT_VERSION then Write(': ')
+  else Write(' -until ', Format('%1.0f', [version + 0.0]), ': ');
+
   block_offset := 32 * Ord(password <> '');
   data_offset := block_offset;
   found_data := False;
@@ -608,7 +704,7 @@ begin
                     Inc(j);
                   end;
                 end;
-                if IsSelected(fn) then
+                if IsSelected(fn, False) then
                 begin
                   existing := GetDT(fn);
                   existing.date := dtr.date;
@@ -692,6 +788,11 @@ begin
 
   if (inArc.Tell() > 32 * Ord(password <> '')) and (not found_data) then
     raise Exception.Create('archive contains no data');
+  lastOffset := block_offset;
+  nfilesSeen := filesSeen;
+  WriteLn(Format('%d versions, %d files, %d fragments, %1.6f MB',
+    [Length(ver) - 1, filesSeen, Length(ht) - 1,
+     block_offset / 1000000.0]));
 
   for i := 0 to dt.Count - 1 do
   begin
@@ -726,24 +827,101 @@ end;
 { list                                                                }
 { ------------------------------------------------------------------ }
 
-procedure TJidac.List;
+function TJidac.List: Integer;
 var
-  i: Integer;
-  dtr: TDT;
-  total: Int64;
+  i, j, idx: Integer;
+  dtr, dir: TDT;
+  usize, allsize, ddsize: Int64;
+  nfiles, refs, nfrags, unknown, total: Cardinal;
+  refsSeen: array of Boolean;
+  sel: Boolean;
+  internal: Cardinal;
 begin
-  total := 0;
+  { Directory sizes are the sum of their contents (upstream, before listing). }
+  for i := 0 to dt.Count - 1 do
+  begin
+    dtr := TDT(dt.Objects[i]);
+    if (Length(dt[i]) > 0) and (dt[i][Length(dt[i])] <> '/') then
+      for j := 1 to Length(dt[i]) do
+        if dt[i][j] = '/' then
+        begin
+          idx := dt.IndexOf(Copy(dt[i], 1, j));
+          if idx >= 0 then
+          begin
+            dir := TDT(dt.Objects[idx]);
+            Inc(dir.size, dtr.size);
+          end;
+        end;
+  end;
+
+  WriteLn;
+
+  usize := 0;
+  internal := 0;
   for i := 0 to dt.Count - 1 do
   begin
     dtr := TDT(dt.Objects[i]);
     if dtr.date = 0 then Continue;
-    if (dt[i] <> '') and (dt[i][Length(dt[i])] <> '/') then
-      Inc(total, dtr.size);
-    Write('-', ' ', DateToString(dtr.date), ' ',
-          Format('%12.0f', [dtr.size + 0.0]), ' ',
-          AttrToString(dtr.attr), ' ', dt[i]);
-    WriteLn;
+    { selection applies to the renamed name for list (upstream passes
+      renamed=true), and -not =... suppresses by comparison result }
+    sel := IsSelected(Rename(dt[i]), True);
+    if sel and (Pos('-', nottype) > 0) then sel := False;
+    if sel then
+    begin
+      if (dt[i] <> '') and (dt[i][Length(dt[i])] <> '/') then
+        Inc(usize, dtr.size);
+      Write('-', ' ', DateToString(dtr.date), ' ',
+            Format('%12.0f', [dtr.size + 0.0]), ' ',
+            AttrToString(dtr.attr), ' ', dt[i]);
+      WriteLn;
+      Inc(internal);
+    end;
   end;
+
+  { Statistics: dedupe counts over every file in the archive. }
+  allsize := 0;
+  ddsize := 0;
+  nfiles := 0;
+  refs := 0;
+  nfrags := 0;
+  unknown := 0;
+  total := Cardinal(Length(ht)) - 1;
+  SetLength(refsSeen, Length(ht));
+  for i := 0 to dt.Count - 1 do
+  begin
+    dtr := TDT(dt.Objects[i]);
+    if dtr.date = 0 then Continue;
+    Inc(nfiles);
+    for j := 0 to High(dtr.ptr) do
+    begin
+      idx := dtr.ptr[j];
+      if (idx > 0) and (idx < Length(ht)) then
+      begin
+        Inc(refs);
+        if ht[idx].usize >= 0 then Inc(allsize, ht[idx].usize);
+        if not refsSeen[idx] then
+        begin
+          refsSeen[idx] := True;
+          Inc(nfrags);
+          if ht[idx].usize >= 0 then Inc(ddsize, ht[idx].usize)
+          else Inc(unknown);
+        end;
+      end;
+    end;
+  end;
+
+  WriteLn;
+  WriteLn(Format('%1.6f MB of %1.6f MB (%d files) shown',
+                 [usize / 1000000.0, allsize / 1000000.0, nfiles]));
+  WriteLn(Format('  -> %1.6f MB (%d refs to %d of %d frags) after dedupe',
+                 [ddsize / 1000000.0, refs, nfrags, total]));
+  WriteLn(Format('  -> %1.6f MB compressed.', [lastOffset / 1000000.0]));
+  if unknown > 0 then
+    WriteLn(unknown, ' fragments have unknown size');
+  if files.Count > 0 then
+    WriteLn(Format('%d =same, %d #different, %d +external, %d -internal',
+                   [0, 0, 0, internal]));
+  Result := 0;
 end;
 
 { ------------------------------------------------------------------ }
@@ -806,7 +984,7 @@ begin
   end;
 end;
 
-function TJidac.Extract(const destDir: string; force: Boolean): Integer;
+function TJidac.Extract(force: Boolean): Integer;
 var
   i, nb, k: Integer;
   dtr: TDT;
@@ -829,17 +1007,14 @@ begin
     begin
       dtr := TDT(dt.Objects[i]);
       if dtr.date = 0 then Continue;
+      { selection: files..., -only, -not.  Extract tests the stored name. }
+      if not IsSelected(dt[i], False) then Continue;
       if (dt[i] <> '') and (dt[i][Length(dt[i])] = '/') then
       begin
-        if destDir <> '' then
-          MakePath(IncludeTrailingPathDelimiter(destDir) + dt[i])
-        else
-          MakePath(dt[i]);
+        MakePath(Rename(dt[i]), dtr.date, dtr.attr);
         Continue;
       end;
-      outPath := dt[i];
-      if destDir <> '' then
-        outPath := IncludeTrailingPathDelimiter(destDir) + outPath;
+      outPath := Rename(dt[i]);
       MakePath(outPath);
       fo := TFileStream.Create(outPath, fmCreate);
       try
@@ -1108,6 +1283,11 @@ var
   htsize: Cardinal;
   nfilesC: Cardinal;
   jdcComment: AnsiString;
+  outName, part0, partname: string;
+  parts: Integer;
+  partOffset: Int64;
+  fs: TFileStream;
+  salt: array[0..31] of AnsiChar;
   sp: Integer;
   cc: Int64;
   ch8: Int64;
@@ -1131,6 +1311,65 @@ begin
   if FileExists(SubPart(archive, 1)) then
     header_pos := ReadArchive(errors, nfilesC);
 
+  { Multi-part: "*" or "????" in the name.  Reading concatenates the parts;
+    each add appends a new part, like upstream. }
+  outName := archive;
+  partOffset := 0;
+  parts := 0;
+  part0 := SubPart(archive, 0);
+  if part0 <> archive then
+  begin
+    i := 1;
+    while True do
+    begin
+      partname := SubPart(archive, i);
+      if partname = part0 then
+        raise Exception.Create('too many archive parts');
+      if not FileExistsUTF8(partname) then Break;
+      Inc(parts);
+      fs := TFileStream.Create(partname, fmOpenRead or fmShareDenyNone);
+      try
+        Inc(partOffset, fs.Size);
+      finally
+        fs.Free;
+      end;
+      Inc(i);
+    end;
+    header_pos := 32 * Ord((password <> '') and (parts = 0));
+    outName := SubPart(archive, parts + 1);
+    if FileExistsUTF8(outName) then
+      raise Exception.Create('part exists');
+  end;
+
+  { Encryption salt: reuse the one in the first part, or make a new one. }
+  FillChar(salt, SizeOf(salt), 0);
+  if password <> '' then
+  begin
+    if FileExistsUTF8(SubPart(archive, 1)) then
+    begin
+      fs := TFileStream.Create(SubPart(archive, 1), fmOpenRead or fmShareDenyNone);
+      try
+        if fs.Read(salt, 32) <> 32 then
+          raise Exception.Create('cannot read salt');
+      finally
+        fs.Free;
+      end;
+    end
+    else
+    begin
+      if header_pos > 32 then
+        raise Exception.Create('archive first part not found');
+      header_pos := 32;
+      zq_random(@salt[0], 32);
+    end;
+  end;
+
+  if FileExistsUTF8(outName) then Write('Updating ')
+  else Write('Creating ');
+  Write(outName, ' at offset ', Format('%1.0f', [header_pos + 0.0]), ' + ',
+        Format('%1.0f', [partOffset + 0.0]));
+  WriteLn;
+
   { Method defaults }
   if m = '' then m := '1';
   if Length(m) = 1 then
@@ -1153,15 +1392,16 @@ begin
   if (logbs < 20) or (logbs > 31) then
     raise Exception.Create('blocksize must be 0..11');
   blocksize := (Int64(1) shl logbs) - 4096;
-  { fragment size: default -fragment 6 }
-  if (6 > 19) or ((Int64(8128) shl 6) > blocksize - 12) then
+  { fragment size: -fragment N, 2^N KiB average (default 6) }
+  if (fragment < 0) then fragment := 0;
+  if (fragment > 19) or ((Int64(8128) shl fragment) > blocksize - 12) then
     maxFrag := blocksize - 12
   else
-    maxFrag := Int64(8128) shl 6;
-  if (6 > 25) or ((Int64(64) shl 6) > maxFrag) then
+    maxFrag := Int64(8128) shl fragment;
+  if (fragment > 25) or ((Int64(64) shl fragment) > maxFrag) then
     minFrag := maxFrag
   else
-    minFrag := Int64(64) shl 6;
+    minFrag := Int64(64) shl fragment;
 
   for i := 0 to High(blocks) do
     if blocks[i].usize < 0 then
@@ -1248,9 +1488,13 @@ begin
     FillChar(ht[0], SizeOf(THT), 0);
   end;
   htinv := THTIndex.Create(Length(ht) + (total_size shr 10) + vf.Count);
+  htinv.Update(ht);   { index the fragments already in the archive }
   htsize := Cardinal(Length(ht));
 
-  outArc := TOutputArchive.Create(archive, password, nil, 0);
+  if password <> '' then
+    outArc := TOutputArchive.Create(outName, password, @salt[0], partOffset)
+  else
+    outArc := TOutputArchive.Create(outName, password, nil, partOffset);
   sb := zq_buf_new(SizeUInt(blocksize) + 4096 - 128);
   isb := zq_buf_new(64);
   GetMem(fragbuf, maxFrag);
@@ -1330,7 +1574,9 @@ begin
               Inc(sz);
             end;
             if (c < 0) or (sz >= maxFrag) or
-               ((h < (Cardinal(1) shl (22 - 6))) and (sz >= minFrag)) then
+               ((fragment <= 22) and
+                (h < (Cardinal(1) shl (22 - fragment))) and
+                (sz >= minFrag)) then
               Break;
           end;
           Inc(total_done, sz);
@@ -1590,9 +1836,9 @@ begin
     if archive_end < archive_size then
     begin
       if archive_end > 0 then
-        TruncateFile(archive, archive_end)
+        TruncateFile(outName, archive_end)
       else
-        DeleteFile(archive);
+        DeleteFile(outName);
     end;
   finally
     outArc.Free;

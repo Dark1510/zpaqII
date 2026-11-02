@@ -159,6 +159,8 @@ typedef struct zq_sha256 {
   char     hbuf[32];
 } zq_sha256;
 
+zq_sha256  *zq_sha256_new(void);
+void        zq_sha256_free(zq_sha256 *s);
 void        zq_sha256_init(zq_sha256 *s);
 void        zq_sha256_put(zq_sha256 *s, int c);
 void        zq_sha256_write(zq_sha256 *s, const char *buf, zq_i64 n);

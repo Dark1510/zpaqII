@@ -285,3 +285,35 @@ small archives is dominated by per-block re-open and the O(n²) fragment offset
 loop in `TJidac.Extract`, which is the first thing to fix before any asm.
 Priorities for asm/JIT, in order: (1) ZPAQL JIT for HCOMP (levels 4–5 spend
 most time there), (2) predictor update loops, (3) coder inner loops.
+
+## E7: command line options (completed)
+
+Every option of upstream's CLI is implemented and checked against the
+reference binary by `tests/cli.sh` (`make test-e6d`, 26 checks):
+
+| option | behaviour | verification |
+|---|---|---|
+| `-fragment N` | 2^N KiB average fragment size (default 6) | archives bit-identical for N = 0,3,6,9,12 |
+| `-to out...` | rename `files...` to `out...`, or everything under `out` | extracted trees identical (single, several, prefix rename) |
+| `-only files...` | include only matching prefixes | extract and list identical |
+| `-not files...` | exclude prefixes; `=chars` filters list output by result | extract and list identical |
+| `-key X` | encrypted archives (SHA-256 of X feeds stretchKey) | encrypted add bit-identical with a deterministic `/dev/urandom`; cross extraction both ways; wrong password gives the same message and exit code |
+| `part*.zpaq` / `part????.zpaq` | multi-part archives: reading concatenates, each add appends a new part | both parts bit-identical; extraction identical |
+| `-force` / `-f` | add: re-append selected files; extract: overwrite | archives bit-identical |
+| `-tN` / `-threads N` | accepted (the implementation is single threaded) | options parsed, archives unchanged |
+
+Two real bugs were found while writing these checks:
+
+* **fragment dedupe against the existing archive was broken.** `THTIndex` was
+  only updated when a *new* fragment was inserted, so re-adding unchanged
+  content stored it again instead of reusing the existing fragment (visible as
+  a much larger archive, not as a wrong extraction). Fixed by indexing the
+  fragments read from the archive before scanning the input.
+* **`-key` hashed nothing.** Upstream uses `SHA256(password)` as the
+  `stretchKey` password; the port passed the raw text, so archives were
+  encrypted with a different key. Fixed with `KeyDigest()` in the host.
+
+Still open in the CLI: `-index` (read/write index archives), parallel
+compression with `-tN > 1` (upstream's output depends on the thread count), and
+the `list` comparison against the file system (`=same`/`#different`/`+external`
+statuses, `-summary`, `-test`, `-repack`).

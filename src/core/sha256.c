@@ -1,11 +1,20 @@
 /* zpaqII - SHA-256.  Port of libzpaq 7.15 (Unlicense, Matt Mahoney). */
 #include "zq.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static unsigned ror32(unsigned a, unsigned b) {
   return (a >> b) | (a << (32 - b));
 }
+
+zq_sha256 *zq_sha256_new(void) {
+  zq_sha256 *s = (zq_sha256 *)zq_calloc(sizeof(zq_sha256));
+  zq_sha256_init(s);
+  return s;
+}
+
+void zq_sha256_free(zq_sha256 *s) { free(s); }
 
 void zq_sha256_init(zq_sha256 *s) {
   s->len0 = s->len1 = 0;

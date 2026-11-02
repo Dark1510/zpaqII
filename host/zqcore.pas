@@ -59,6 +59,14 @@ function zq_buf_reader(b: TZqBuf): TZqReader; cdecl; external;
 function zq_buf_writer(b: TZqBuf): TZqWriter; cdecl; external;
 
 { --- SHA-1 --- }
+type
+  TZqSha256 = Pointer;
+
+function zq_sha256_new: TZqSha256; cdecl; external;
+procedure zq_sha256_free(s: TZqSha256); cdecl; external;
+procedure zq_sha256_put(s: TZqSha256; c: LongInt); cdecl; external;
+function zq_sha256_result(s: TZqSha256): PAnsiChar; cdecl; external;
+
 function zq_sha1_new: TZqSha1; cdecl; external;
 procedure zq_sha1_free(s: TZqSha1); cdecl; external;
 procedure zq_sha1_init(s: TZqSha1); cdecl; external;
