@@ -150,6 +150,9 @@ host: $(BUILD)/zpaqii
 matrix: $(BUILD)/zpaqii $(BUILD)/faketime.so
 	@tests/matrix.sh $(BUILD)
 
+bench: $(BUILD)/zpaqii $(BUILD)/faketime.so
+	@tests/bench.sh $(BUILD)
+
 test-e6a: $(BUILD)/zpaqii
 	@python3 tests/fuzz.py $(UPSTREAM)/zpaq $(BUILD)/zpaqii $(BUILD)/fuzzwork 60
 

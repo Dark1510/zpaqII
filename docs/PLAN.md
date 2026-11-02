@@ -249,3 +249,24 @@ the interpreter. `make NOJIT=1` must produce the same output (only slower).
 - One commit per module with its test; never leave the tree unbuildable.
 - English only in code, comments, docs and commit messages.
 - License: Unlicense (same as upstream); `divsufsort` keeps its MIT license.
+
+### E6c baseline (measured)
+
+`make bench` (4 MB corpus, single threaded, interpreter-only build):
+
+| operation | level | upstream | port | ratio |
+|---|---|---|---|---|
+| add text | 1 | 0.07 s | 0.09 s | 78 % |
+| add bin | 1 | 0.09 s | 0.13 s | 69 % |
+| add text | 2 | 0.21 s | 0.24 s | 88 % |
+| add bin | 2 | 0.08 s | 0.11 s | 73 % |
+| add text | 5 | 11.0 s | 21.0 s | 53 % |
+| add bin | 5 | 15.0 s | 22.0 s | 66 % |
+| extract text | 1 | 0.04 s | 0.17 s | 24 % |
+| extract text | 5 | 11.0 s | 22.0 s | 53 % |
+
+The interpreter already reaches 53–88 % of upstream for `add`. Extraction of
+small archives is dominated by per-block re-open and the O(n²) fragment offset
+loop in `TJidac.Extract`, which is the first thing to fix before any asm.
+Priorities for asm/JIT, in order: (1) ZPAQL JIT for HCOMP (levels 4–5 spend
+most time there), (2) predictor update loops, (3) coder inner loops.
