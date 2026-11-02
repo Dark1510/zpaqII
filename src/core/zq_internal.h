@@ -10,6 +10,22 @@
 #include "zq.h"
 
 /* ------------------------------------------------------------------ */
+/* Target capabilities                                                 */
+/* ------------------------------------------------------------------ */
+
+/* The JIT emits System V x86-64 machine code and allocates executable memory
+ * with mmap, so it is only built for x86-64 outside Windows and macOS (whose
+ * x86-64 ABI and page protection differ).  Everywhere else the core uses the
+ * ZPAQL interpreter and the portable predictor, which produce identical
+ * output: the JIT is a speed feature, never a correctness one.  A build can
+ * still force the interpreter with -DZQ_NOJIT. */
+#if !defined(ZQ_NOJIT)
+#if !defined(__x86_64__) || defined(_WIN32) || defined(__APPLE__)
+#define ZQ_NOJIT 1
+#endif
+#endif
+
+/* ------------------------------------------------------------------ */
 /* CPU features (cpu.c)                                                */
 /* ------------------------------------------------------------------ */
 

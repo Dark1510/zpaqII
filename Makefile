@@ -31,7 +31,7 @@ BUILD    := build$(if $(DEBUG),-debug,)$(if $(NOJIT),-nojit,)
 CORE_SRC := $(wildcard src/core/*.c)
 CORE_OBJ := $(patsubst src/core/%.c,$(BUILD)/obj/%.o,$(CORE_SRC))
 
-.PHONY: all lib test test-e1 test-sha1hw test-fragchain oracle clean info
+.PHONY: all lib test test-e1 test-sha1hw test-fragchain cross oracle clean info
 
 all: lib test
 
@@ -70,6 +70,9 @@ $(BUILD)/vectors_e1: tests/unit/vectors_e1.c $(BUILD)/libzqcore.a
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
 
+$(BUILD)/e1_upstream.txt: $(BUILD)/e1_oracle
+	@$(BUILD)/e1_oracle > $@
+
 $(BUILD)/e1_oracle: tools/oracle/e1_dump.cpp
 	@mkdir -p $(BUILD)
 	$(CXX) -O2 -Dunix -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
@@ -94,6 +97,10 @@ test-sha1hw: $(BUILD)/sha1_hw
 $(BUILD)/sha1_hw: tests/unit/sha1_hw.c $(BUILD)/libzqcore.a
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
+
+# Every target we can compile for, and every test we can run here.
+cross: $(BUILD)/e1_upstream.txt
+	@tools/cross.sh
 
 test-e2: $(BUILD)/zpaql_dump $(BUILD)/e2_oracle
 	@$(BUILD)/e2_oracle $(BUILD)/e2_manifest.txt $(BUILD)/e2_upstream.txt

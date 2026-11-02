@@ -11,6 +11,24 @@ Target platforms (agreed):
 | `windows-x86` | Windows 7+ | i386 | 32-bit build |
 | `macos-aarch64` | macOS | Apple silicon | no JIT on first round (see below) |
 
+## Verified today (`make cross`)
+
+`tools/cross.sh` compiles the whole core for each target and runs the tests on
+the targets this machine can execute:
+
+| target | compile | tests |
+|---|---|---|
+| Linux x86-64 (native) | 23 objects, 0 warnings | vectors_e1 identical to the oracle, fragchain 50/0 |
+| Linux i386 (`gcc -m32`) | 23 objects | vectors_e1 identical to the oracle |
+| Linux arm64 (cross + `qemu-aarch64`) | 23 objects | vectors_e1 identical to the oracle, fragchain 50/0 |
+| Windows x86-64 (mingw, static) | 23 objects | run by hand on a Windows 10 VM: vectors_e1 identical |
+| Windows x86 (mingw, static) | 23 objects | run by hand on a Windows 7 SP1 VM: vectors_e1 identical |
+
+The JIT is now selected by the target, not by a build flag: `zq_internal.h`
+defines `ZQ_NOJIT` unless the target is x86-64 with a System V ABI, so Windows,
+macOS and every ARM build use the interpreter automatically (byte-identical
+output, see `JIT.md`) and `jit.c` no longer includes `<sys/mman.h>` there.
+
 ## What is already portable
 
 * **The whole codec** (`src/core/*.c`): SHA-1/256, AES-CTR, scrypt, ZPAQL VM and

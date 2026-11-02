@@ -21,9 +21,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 
 #ifndef ZQ_NOJIT
+#include <sys/mman.h>
 
 /* Allocate/free executable memory (libzpaq::allocx). */
 void zq_allocx(zq_u8 **p, int *n, int newsize) {

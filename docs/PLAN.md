@@ -855,6 +855,20 @@ extraction to match (118 checks).  Also verified by hand on files that end
 exactly on a `maxfrag` cut (the empty trailing fragment) and on a 70 MB file
 that crosses a batch boundary.
 
+## 2.3p: the core builds and runs on five targets
+
+The JIT emitted System V x86-64 code but the build only switched it off with
+`-DZQ_NOJIT`, so a Windows or ARM build would have compiled it and crashed at
+run time.  `zq_internal.h` now decides by target: `ZQ_NOJIT` unless the target
+is x86-64 outside Windows and macOS; `jit.c` includes `<sys/mman.h>` only when
+the JIT is built.
+
+`make cross` (`tools/cross.sh`) compiles the core for every target with a
+compiler here and runs what can be run: Linux x86-64, Linux i386 (`-m32`),
+Linux arm64 (under `qemu-aarch64`), and the two mingw builds.  The E1 vectors
+are identical to the oracle in all of them; Windows was also run for real, in a
+Windows 10 x64 VM and a Windows 7 SP1 x86 VM (357/357 each).
+
 ## 2.2a: `-strict` — exit codes that never hide a failure
 
 Decision (2026-11-02): the **default stays 7.15-exact**; the stricter behaviour
