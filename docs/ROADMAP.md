@@ -116,6 +116,24 @@ improvements opt-in) or adopts the forks' defaults (stricter exit codes, unknown
 switches ignored).  Either way `-715` must reproduce 7.15 byte for byte and
 behaviour for behaviour.
 
+## Platforms (agreed, cross-cutting)
+
+`zpaqII` must run on **Linux x86-64, Linux arm64, Linux x86, Windows x86-64,
+Windows x86 (Windows 7 or newer) and macOS arm64**.  This is not a phase of its
+own: every item above must be written portably from the start, and the port is
+finished when the build works on all six.  Details, what is already portable and
+what blocks each target: `docs/PORTABILITY.md`.
+
+Consequences for the items above:
+
+* **2.1**: the fragment scanner and the hardware SHA dispatch must have a
+  portable fallback and per-platform CPU detection (`src/core/cpu.c`).  The JIT
+  stays Linux x86-64 only for now; on the other targets the core builds with
+  `ZQ_NOJIT`, which is byte-exact.
+* **2.2 / 2.3**: new code goes through the same narrow interfaces; no POSIX
+  calls outside `zqos`.
+* **2.4**: external codecs must be portable C (zstd and LZ4 both are).
+
 ## Out of scope (decided, not pending)
 
 * Changing the archive format to drop SHA-1 or to add authenticated encryption
