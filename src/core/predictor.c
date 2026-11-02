@@ -329,28 +329,9 @@ int zq_pred_predict_ref(zq_predictor *pr) {
   return zq_squash(pr, pr->p[n - 1]);
 }
 
-/* c8/hmap4 bookkeeping, shared by the interpreter and the JIT. */
-static void zq_pred_update_c8(zq_predictor *pr, int y) {
-  zq_zpaql *z = pr->z;
-  const int n = ZQ_HDR(z, 6);
-  int i;
-
-  pr->c8 += pr->c8 + y;
-  if (pr->c8 >= 256) {
-    zq_zpaql_run(z, (zq_u32)(pr->c8 - 256));
-    pr->hmap4 = 1;
-    pr->c8 = 1;
-    for (i = 0; i < n; ++i) pr->h[i] = ZQ_H(z, i);
-  } else if (pr->c8 >= 16 && pr->c8 < 32) {
-    pr->hmap4 = ((pr->hmap4 & 0xf) << 5) | (y << 4) | 1;
-  } else {
-    pr->hmap4 = (pr->hmap4 & 0x1f0) | (((pr->hmap4 & 0xf) * 2 + y) & 0xf);
-  }
-}
-
 #ifndef ZQ_NOJIT
 /* Assemble the predictor once; 1 on success. */
-static int zq_pred_jit_build(zq_predictor *pr) {
+int zq_pred_jit_build(zq_predictor *pr) {
   int n;
   zq_allocx(&pr->pcode, &pr->pcode_size, (pr->z->cend * 100 + 4096) & -4096);
   n = zq_pred_assemble(pr);
@@ -463,30 +444,3 @@ void zq_pred_update_ref(zq_predictor *pr, int y) {
   zq_pred_update_c8(pr, y);
 }
 
-/* Save bit y in c8, hmap4 and recompute H at byte boundaries.  The JIT only
- * updates the components, so this stays in C like upstream. */
-int zq_pred_predict(zq_predictor *pr) {
-#ifndef ZQ_NOJIT
-  if (!pr->pcode) {
-    if (!zq_pred_jit_build(pr)) return zq_pred_predict_ref(pr);
-  }
-  return ((int (*)(zq_predictor *))&pr->pcode[10])(pr);
-#else
-  return zq_pred_predict_ref(pr);
-#endif
-}
-
-void zq_pred_update(zq_predictor *pr, int y) {
-#ifndef ZQ_NOJIT
-  if (!pr->pcode) {
-    if (!zq_pred_jit_build(pr)) {
-      zq_pred_update_ref(pr, y);
-      return;
-    }
-  }
-  ((void (*)(zq_predictor *, int))&pr->pcode[5])(pr, y);
-  zq_pred_update_c8(pr, y);
-#else
-  zq_pred_update_ref(pr, y);
-#endif
-}

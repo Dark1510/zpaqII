@@ -587,3 +587,35 @@ The last known fidelity gap (`docs/DEVIATIONS.md`) is closed:
 base archives are built with the clock shim (`faketime.so`, or `ZPAQII_NOW`), so
 every run mutates the same bytes.  Exit-code disagreements are counted as
 failures instead of warnings: 204 cases, **0 failures**.
+
+## E21: bulk I/O and inline predictor dispatch
+
+Three hot spots the profiler put on top of the model-free path and of every
+block, all removed:
+
+* **Stored blocks were written per byte.** `zq_c_compress()` called
+  `zq_enc_compress()` for every input byte; for an unmodelled block that only
+  copies into the 64 KB buffer.  New `zq_enc_compress_buf()` copies whole
+  chunks (with the same 4-byte length framing) and the SHA-1 runs over the
+  chunk too, so a stored block is now a `memcpy`.
+* **`TOutputArchive.WriteBuf` copied byte by byte** with an index check per
+  byte.  It now moves whole runs into the 64 KB buffer.
+* **The predictor dispatch cost a call per bit.** `zq_pred_predict()` and
+  `zq_pred_update()` were extern functions (prologue, the `pcode != NULL`
+  test, the call and the epilogue for every bit of every byte); they are now
+  `static inline` in `zq_internal.h`, together with the `c8`/`hmap4`
+  bookkeeping, and only `zq_pred_jit_build()` stays out of line.
+
+Measured (`-t1`, pinned core, best of 3):
+
+| case | upstream | port | ratio |
+|---|---|---|---|
+| `-m1` 3 MB text | 0.104 s | 0.108 s | 96 % |
+| `-m2` 3 MB text | 0.334 s | 0.338 s | 99 % |
+| `-m3` 3 MB text | 0.641 s | 0.608 s | 106 % |
+| `-m4` 3 MB text | 0.642 s | 0.619 s | 104 % |
+| `-m5` 1 MB text | 2.597 s | 2.572 s | 101 % |
+| `-m4` 20 MB random | 0.269 s | 0.212 s | 127 % |
+| extract 16.7 MB `-m4` | 4.15 s | 4.06 s | 102 % |
+
+The port is now at or above upstream on every measured workload.

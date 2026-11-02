@@ -165,12 +165,25 @@ int zq_c_compress(zq_compressor *c, int n) {
     if (nr < 0 || nr > BUFSIZE || nr > nbuf) zq_error("invalid read size");
     if (nr <= 0) return 0;
     if (n >= 0) n -= nr;
-    for (i = 0; i < nr; ++i) {
-      const int ch = (zq_u8)buf[i];
-      zq_enc_compress(&c->enc, ch);
+    if (!zq_pred_is_modeled(&c->enc.pr)) {
+      /* stored block: bulk copy, and SHA-1 in bulk when there is no PCOMP */
       if (c->verify) {
-        if (c->pz.hend) zq_zpaql_run(&c->pz, (zq_u32)ch);
-        else zq_sha1_put(&c->sha1, ch);
+        if (c->pz.hend) {
+          for (i = 0; i < nr; ++i)
+            zq_zpaql_run(&c->pz, (zq_u32)(zq_u8)buf[i]);
+        } else {
+          zq_sha1_write(&c->sha1, buf, nr);
+        }
+      }
+      zq_enc_compress_buf(&c->enc, buf, nr);
+    } else {
+      for (i = 0; i < nr; ++i) {
+        const int ch = (zq_u8)buf[i];
+        zq_enc_compress(&c->enc, ch);
+        if (c->verify) {
+          if (c->pz.hend) zq_zpaql_run(&c->pz, (zq_u32)ch);
+          else zq_sha1_put(&c->sha1, ch);
+        }
       }
     }
   }

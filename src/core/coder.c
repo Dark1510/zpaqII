@@ -181,6 +181,36 @@ void zq_enc_encode(zq_encoder *e, int y, int p) {
   }
 }
 
+/* Flush the stored (unmodelled) buffer: 4 byte length then the bytes. */
+static void zq_enc_flush_store(zq_encoder *e) {
+  if (!e->low) return;
+  e->out->put(e->out->self, (int)((e->low >> 24) & 255));
+  e->out->put(e->out->self, (int)((e->low >> 16) & 255));
+  e->out->put(e->out->self, (int)((e->low >> 8) & 255));
+  e->out->put(e->out->self, (int)(e->low & 255));
+  zq_writer_write(e->out, (const char *)e->buf, (int)e->low);
+  e->low = 0;
+}
+
+/* Compress n bytes.  For unmodelled blocks they are stored, so the whole
+ * chunk is copied instead of going through the per-byte function (which
+ * costs an indirect call per byte on a stored block). */
+void zq_enc_compress_buf(zq_encoder *e, const char *p, int n) {
+  if (zq_pred_is_modeled(&e->pr)) {
+    while (n-- > 0) zq_enc_compress(e, (zq_u8)*p++);
+    return;
+  }
+  while (n > 0) {
+    zq_u32 space = e->bufn - e->low;
+    int k = (zq_u32)n < space ? n : (int)space;
+    memcpy(e->buf + e->low, p, (size_t)k);
+    e->low += (zq_u32)k;
+    p += k;
+    n -= k;
+    if (e->low == e->bufn) zq_enc_flush_store(e);
+  }
+}
+
 void zq_enc_compress(zq_encoder *e, int c) {
   if (zq_pred_is_modeled(&e->pr)) {
     if (c == -1) {
@@ -196,14 +226,7 @@ void zq_enc_compress(zq_encoder *e, int c) {
       }
     }
   } else {
-    if (e->low && (c < 0 || e->low == e->bufn)) {
-      e->out->put(e->out->self, (int)((e->low >> 24) & 255));
-      e->out->put(e->out->self, (int)((e->low >> 16) & 255));
-      e->out->put(e->out->self, (int)((e->low >> 8) & 255));
-      e->out->put(e->out->self, (int)(e->low & 255));
-      zq_writer_write(e->out, (const char *)e->buf, (int)e->low);
-      e->low = 0;
-    }
+    if (e->low && (c < 0 || e->low == e->bufn)) zq_enc_flush_store(e);
     if (c >= 0) e->buf[e->low++] = (zq_u8)c;
   }
 }

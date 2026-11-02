@@ -297,18 +297,24 @@ end;
 
 procedure TOutputArchive.WriteBuf(buf: PAnsiChar; len: LongInt);
 var
-  i: LongInt;
+  n: LongInt;
 begin
   if fStream = nil then
   begin
     Inc(fOff, len);
     Exit;
   end;
-  for i := 0 to len - 1 do
+  { Bulk copy: the per-byte loop cost an instruction per byte on every
+    block, which showed on stored blocks. }
+  while len > 0 do
   begin
     if fPtr >= SizeOf(fBuf) then Flush;
-    fBuf[fPtr] := buf[i];
-    Inc(fPtr);
+    n := SizeOf(fBuf) - fPtr;
+    if n > len then n := len;
+    Move(buf^, fBuf[fPtr], n);
+    Inc(fPtr, n);
+    Inc(buf, n);
+    Dec(len, n);
   end;
 end;
 

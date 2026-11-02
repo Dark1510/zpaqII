@@ -121,13 +121,58 @@ void zq_pred_free(zq_predictor *pr);
 static inline int zq_pred_is_modeled(const zq_predictor *pr) {
   return pr->z->header.n > 6 && ZQ_HDR(pr->z, 6) != 0;
 }
-int  zq_pred_predict(zq_predictor *pr);      /* 0..4095 */
 int  zq_pred_predict_ref(zq_predictor *pr);  /* interpreter, for tests */
 void zq_pred_update_ref(zq_predictor *pr, int y);
 #ifndef ZQ_NOJIT
 int  zq_pred_assemble(zq_predictor *pr);     /* predictor JIT, bytes needed */
+int  zq_pred_jit_build(zq_predictor *pr);    /* assemble once; 1 on success */
 #endif
-void zq_pred_update(zq_predictor *pr, int y);
+
+/* c8/hmap4 bookkeeping and the HCOMP run at byte boundaries.  The JIT only
+ * updates the components, so this stays in C (like upstream).  It is inline
+ * because the coder calls it once per bit. */
+static inline void zq_pred_update_c8(zq_predictor *pr, int y) {
+  zq_zpaql *z = pr->z;
+  const int n = ZQ_HDR(z, 6);
+  int i;
+
+  pr->c8 += pr->c8 + y;
+  if (pr->c8 >= 256) {
+    zq_zpaql_run(z, (zq_u32)(pr->c8 - 256));
+    pr->hmap4 = 1;
+    pr->c8 = 1;
+    for (i = 0; i < n; ++i) pr->h[i] = ZQ_H(z, i);
+  } else if (pr->c8 >= 16 && pr->c8 < 32) {
+    pr->hmap4 = ((pr->hmap4 & 0xf) << 5) | (y << 4) | 1;
+  } else {
+    pr->hmap4 = (pr->hmap4 & 0x1f0) | (((pr->hmap4 & 0xf) * 2 + y) & 0xf);
+  }
+}
+
+/* Called once per bit by the coder: keep the JIT dispatch here so there is no
+ * extra call/prologue per bit, and fall back to the interpreter only when no
+ * code could be assembled. */
+static inline int zq_pred_predict(zq_predictor *pr) {
+#ifndef ZQ_NOJIT
+  if (!pr->pcode && !zq_pred_jit_build(pr)) return zq_pred_predict_ref(pr);
+  return ((int (*)(zq_predictor *))&pr->pcode[10])(pr);
+#else
+  return zq_pred_predict_ref(pr);
+#endif
+}
+
+static inline void zq_pred_update(zq_predictor *pr, int y) {
+#ifndef ZQ_NOJIT
+  if (!pr->pcode && !zq_pred_jit_build(pr)) {
+    zq_pred_update_ref(pr, y);
+    return;
+  }
+  ((void (*)(zq_predictor *, int))&pr->pcode[5])(pr, y);
+  zq_pred_update_c8(pr, y);
+#else
+  zq_pred_update_ref(pr, y);
+#endif
+}
 size_t zq_pred_find(zq_predictor *pr, zq_arr *ht, int sizebits, zq_u32 cxt);
 
 /* ------------------------------------------------------------------ */
@@ -164,7 +209,8 @@ void zq_enc_open(zq_encoder *e, zq_zpaql *z);
 void zq_enc_close(zq_encoder *e);
 void zq_enc_init_block(zq_encoder *e);
 void zq_enc_encode(zq_encoder *e, int y, int p);
-void zq_enc_compress(zq_encoder *e, int c);   /* c is 0..255 or -1 (EOS) */
+void zq_enc_compress(zq_encoder *e, int c);
+void zq_enc_compress_buf(zq_encoder *e, const char *p, int n);   /* c is 0..255 or -1 (EOS) */
 
 /* ------------------------------------------------------------------ */
 /* Postprocessor, Decompresser, Compressor                             */
