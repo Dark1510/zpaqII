@@ -78,6 +78,44 @@ planned unless a concrete need appears:
 * Remote transports (SFTP/SSH) — better left to rsync, as zpaqfranz's own
   README suggests for append-only copies.
 
+## Parked (recorded, not worked on for now)
+
+These are limitations that the forks themselves have *open* (see
+`LIMITATIONS.md` §2.3).  They are kept here so they are not rediscovered, but
+they are **not** part of phase 2 unless the plan changes:
+
+* SHA-1 as the fragment identity in the format ("XOR SHA-1 to VFILE", "a new
+  format without SHA-1" — zpaqfranz's own TODO, decided not worth it).
+* Fast listing without storing a history inside the archive (the README of
+  zpaqfranz calls it its main defect; `-fast` is a workaround that costs space).
+* The general speed of the CM models (2016) — we only work on the edges
+  (item 2), not on new models.
+* zpaq-std's open Windows bug: `-ma:hs` and `-ma:lzfse` crash on `_WIN32`
+  (`memset` with a garbage size, root cause unknown, rejected up front there).
+* The four methods that write different bytes on 32-bit builds.
+* Experimental codecs whose encoder may still change (`bz2`, `sylz`, `sylzec`,
+  `pja`).
+* Packaging (FreeBSD port) and the wiki.
+* Authenticated container inside the `.zpaq` format: out of scope, see below.
+
+## Execution order
+
+Proposed sequence once this list is approved (each phase ends with its tests
+green and a commit, as in phase 1):
+
+| phase | item | why here |
+|---|---|---|
+| 2.1 | 2 — parallel fragmenter + hardware SHA | pure speed, archive stays byte-identical, no format change: the safest first win |
+| 2.2 | 4 — exit codes + `-715` | small; the audit is useful now and `-715` becomes the safety net that lets the *default* behaviour evolve later (items 1 and 3) without losing 7.15 equivalence |
+| 2.3 | 3 — configurable integrity and verification | first format extension; needs the `VFILE`/attribute mechanism and the digest plumbing |
+| 2.4 | 1 — external codecs with a ZPAQL decoder per block | the biggest; it can reuse the ZPAQL emitter and the block-comment parsing from 2.3 |
+| 2.5 | 5 — optional platform extras | only on concrete demand |
+
+**Decision to take before 2.2:** whether our *default* stays 7.15-exact (with the
+improvements opt-in) or adopts the forks' defaults (stricter exit codes, unknown
+switches ignored).  Either way `-715` must reproduce 7.15 byte for byte and
+behaviour for behaviour.
+
 ## Out of scope (decided, not pending)
 
 * Changing the archive format to drop SHA-1 or to add authenticated encryption
