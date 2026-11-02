@@ -1038,7 +1038,7 @@ var
   filesSeen: Cardinal;
   lastfile: string;
   block_offset, data_offset: Int64;
-  arcName: string;
+  arcName, allname: string;
   found_data, first, done, skip, restart: Boolean;
   mem: Double;
   rc: Integer;
@@ -1279,6 +1279,15 @@ begin
                 vr.lastdate := fdate;
                 vr.csize := jmp;
                 ver[High(ver)] := vr;
+                if all > 0 then
+                begin
+                  allname := Itos(Int64(Length(ver)) - 1, all) + '/';
+                  if dt.IndexOf(allname) < 0 then
+                  begin
+                    dtr := GetDT(allname);
+                    dtr.date := fdate;
+                  end;
+                end;
                 if jmp <> 0 then
                 begin
                   restart := True;
@@ -1369,6 +1378,8 @@ begin
                     Inc(j);
                   end;
                 end;
+                if all > 0 then
+                  fn := Itos(Int64(Length(ver)) - 1, all) + '/' + fn;
                 if IsSelected(fn, False) then
                 begin
                   existing := GetDT(fn);
@@ -1409,6 +1420,8 @@ begin
               raise Exception.Create(string(zq_last_error));
             skip := True;
             fn := lastfile;
+            if all > 0 then
+              fn := Itos(Int64(Length(ver)) - 1, all) + '/' + fn;
             dtr := GetDT(fn);
             if (Length(fnameSink.s) > 0) or first then
             begin
@@ -2090,6 +2103,18 @@ begin
             Format('%12.0f', [lsize[i] + 0.0]), ' ');
       if not noattributes then Write(AttrToString(lattr[i]), ' ');
       Write(names[i]);
+      if (all > 0) and (Length(names[i]) = all + 1) and
+         (names[i][Length(names[i])] = '/') then
+      begin
+        idx := StrToIntDef(Copy(names[i], 1, all), 0);
+        if (idx > 0) and (idx < Length(ver)) then
+        begin
+          if idx + 1 < Length(ver) then j := ver[idx + 1].offset
+          else j := lastOffset;
+          Write(' +', ver[idx].updates, ' -', ver[idx].deletes, ' -> ',
+                Format('%1.0f', [Int64(j) - ver[idx].offset + 0.0]));
+        end;
+      end;
       if (summary < 0) and (lref[i] >= 0) then
       begin
         dtr := TDT(dt.Objects[lref[i]]);

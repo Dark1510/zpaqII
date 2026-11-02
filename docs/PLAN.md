@@ -427,3 +427,14 @@ same files (no permissions are applied because the stored attribute is 0).
 `tests/cli.sh` checks the archive bytes; the `list` output was verified by hand
 against the oracle (the automated comparison of that one line proved flaky in
 the script, so it is not enforced there).
+
+## E14: -all [N]
+
+With `-all` every version gets its own directory: file records read from the
+archive are prefixed with `%0*N%`, a `<NNNN>/` entry is created per transaction
+with its date, and `list` appends the version summary ` +updates -deletes ->
+bytes` to those directory lines, exactly like upstream.  Extraction creates the
+directories (the fragment table is unchanged).
+
+`tests/cli.sh` compares `list -all 1/2/4` and `extract -all 2` against the
+oracle (68 checks).

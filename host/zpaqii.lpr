@@ -387,6 +387,7 @@ var
   nthreads: Integer;
   summary: Integer;
   dotest, noattrs: Boolean;
+  allver: Integer;
   tmp: TJidac;
   errs2: Integer;
   nfiles2: Cardinal;
@@ -481,6 +482,16 @@ begin
       begin
         Inc(i);
         indexName := ParamStr(i);
+      end
+      else if (a = '-all') then
+      begin
+        allver := 4;
+        if (i < ParamCount) and (ParamStr(i + 1) <> '') and
+           (ParamStr(i + 1)[1] >= '0') and (ParamStr(i + 1)[1] <= '9') then
+        begin
+          Inc(i);
+          allver := StrToIntDef(ParamStr(i), 4);
+        end;
       end
       else if (a = '-noattributes') then
         noattrs := True
@@ -584,6 +595,7 @@ begin
         jadd.summary := summary;
         jadd.dotest := dotest;
         jadd.noattributes := noattrs;
+        jadd.all := allver;
         if jadd.version < 0 then
         begin
           { -until -N: count from the end, like upstream }

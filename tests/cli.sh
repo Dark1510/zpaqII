@@ -356,6 +356,31 @@ fi
 cd ..
 
 
+# ---- -all N: one directory per version ----
+rm -rf av
+mkdir av
+cd av || exit 1
+printf 'v1\n' > f.txt
+touch -d @$((NOW + 1000)) f.txt
+ZPAQII_NOW=$((NOW + 1000)) "$P" add v.zpaq f.txt -m1 >/dev/null 2>&1
+printf 'v2 v2\n' > f.txt
+touch -d @$((NOW + 2000)) f.txt
+ZPAQII_NOW=$((NOW + 2000)) "$P" add v.zpaq f.txt -m1 >/dev/null 2>&1
+for n in 1 2 4; do
+  if diff <("$Z" list v.zpaq -all "$n" -t1 2>&1 | norm) \
+          <("$P" list v.zpaq -all "$n" 2>&1 | norm) >/dev/null 2>&1; then
+    ok
+  else
+    bad "-all $n list"
+  fi
+done
+rm -rf ay az
+mkdir ay az
+"$Z" extract v.zpaq -to ay -all 2 -t1 >/dev/null 2>&1
+"$P" extract v.zpaq -to az -all 2 >/dev/null 2>&1
+if diff -r ay az >/dev/null 2>&1; then ok; else bad "-all 2 extract"; fi
+cd ..
+
 echo
 echo "cli: $cases checks, $fails failures"
 if [ $fails -ne 0 ]; then
@@ -363,4 +388,4 @@ if [ $fails -ne 0 ]; then
   exit 1
 fi
 echo "not covered yet (known gaps):"
-echo "  -repack, -all, convert"
+echo "  -repack, convert"
