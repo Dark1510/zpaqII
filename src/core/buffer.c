@@ -1,17 +1,17 @@
-/* zpaqII — buffer en memoria (libzpaq::StringBuffer) y adaptadores.
- * Port de libzpaq 7.15 (Unlicense, Matt Mahoney). */
+/* zpaqII - in-memory buffer (libzpaq::StringBuffer) and adapters.
+ * Port of libzpaq 7.15 (Unlicense, Matt Mahoney). */
 #include "zq.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 struct zq_buf {
-  unsigned char *p;   /* memoria asignada, puede ser NULL */
-  size_t al;          /* bytes asignados, 0 si p==NULL */
-  size_t wpos;        /* siguiente byte a escribir, <= al */
-  size_t rpos;        /* siguiente byte a leer, <= wpos */
-  size_t limit;       /* tamano maximo */
-  size_t init;        /* tamano inicial al crecer */
+  unsigned char *p;   /* allocated memory, may be NULL */
+  size_t al;          /* bytes allocated, 0 iff p==NULL */
+  size_t wpos;        /* next byte to write, <= al */
+  size_t rpos;        /* next byte to read, <= wpos */
+  size_t limit;       /* maximum size */
+  size_t init;        /* initial growth size */
 };
 
 static void zq_buf_reserve(zq_buf *b, size_t a) {
@@ -109,7 +109,7 @@ void zq_buf_seek_read(zq_buf *b, size_t pos) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Adaptadores Reader/Writer                                           */
+/* Reader/Writer adapters                                              */
 /* ------------------------------------------------------------------ */
 
 static int zq_buf_rget(void *self) { return zq_buf_get((zq_buf *)self); }

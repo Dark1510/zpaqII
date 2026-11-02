@@ -1,10 +1,10 @@
-# zpaqII — arquitectura y convenciones del port
+# zpaqII — architecture and porting conventions
 
-## 1. Mapa de módulos
+## 1. Module map
 
-Referencia upstream → módulo del port. Los rangos de línea son del commit `9ab539f`.
+Upstream reference → port module. Line ranges are from commit `9ab539f`.
 
-| upstream | líneas | port | lenguaje |
+| upstream | lines | port | language |
 |---|---|---|---|
 | `libzpaq.cpp`: allocx, SHA1, SHA256, AES, stretchKey, random | 60–706 | `core/zq_util.c`, `core/sha1.c`, `core/sha256.c`, `core/aes.c` | C |
 | `Component`, `StateTable` | 707–861 | `core/state.c`, `core/component.c` | C |
@@ -15,68 +15,68 @@ Referencia upstream → módulo del port. Los rangos de línea son del commit `9
 | `PostProcessor` | 2183–2242 | `core/postproc.c` | C |
 | `Decompresser` | 2243–2390 | `core/decompresser.c` | C |
 | `Encoder` | 2391–2448 | `core/coder.c` | C |
-| `Compiler` (texto→bytecode) | 2449–2771 | `core/zpaql_asm.c` | C |
+| `Compiler` (text → bytecode) | 2449–2771 | `core/zpaql_asm.c` | C |
 | `Compressor` | 2772–2833 | `core/compressor.c` | C |
 | `MemoryReader`, `compress()` | 2834–3032 | `core/buffer.c`, `core/api.c` | C |
 | `Predictor::assemble_p` (JIT predictor) | 3813–4657 | `core/jit.c` | C + asm |
 | `divsufsort` / `divbwt` | 4658–6435 | `core/divsufsort.c` | C (MIT) |
-| LZ77 / BWT encoder (`makeConfig` helpers) | 6436–6886 | `core/lz77.c` | C |
+| LZ77 / BWT encoder helpers | 6436–6886 | `core/lz77.c` | C |
 | `makeConfig`, `method` parsing, `probe` | 6887–7733 | `core/config.c`, `core/method.c` | C |
-| `zpaq.cpp` entero (archiver JIDAC) | 1–3737 | `host/*.pas` | Pascal |
+| `zpaq.cpp` (JIDAC archiver) | 1–3737 | `host/*.pas` | Pascal |
 
-El **árbol no se portará línea a línea en el mismo orden**: cada módulo se traduce
-con su test contra el oráculo antes de pasar al siguiente.
+The tree is **not** ported line-for-line in that order: each module is
+translated together with its oracle differential test before moving on.
 
-### Módulos del host Pascal (`host/`)
+### Pascal host units (`host/`)
 
-| unidad | responsabilidad | origen upstream |
+| unit | responsibility | upstream origin |
 |---|---|---|
-| `zqfile.pas` | `File` layer: fopen/fread/fseek, fechas, atributos, makepath, truncate | `zpaq.cpp` 376–593 |
+| `zqfile.pas` | `File` layer: fopen/fread/fseek, dates, attributes, makepath, truncate | `zpaq.cpp` 376–593 |
 | `zqtime.pas` | `mtime`, `decimal_time`, `unix_time`, `dateToString`, `attrToString` | 292–375 |
-| `zqarchive.pas` | `ArchiveBase`, `InputArchive`, `OutputArchive`, multi-parte | 594–841 |
+| `zqarchive.pas` | `ArchiveBase`, `InputArchive`, `OutputArchive`, multi-part | 594–841 |
 | `zqscan.pas` | `scandir`, `ispath`, `isselected`, `rename`, path join | 909–942, 1665–1811 |
-| `zqjidac.pas` | estructuras `HT/DT/Block/VER`, `usage`, `doCommand` | 943–1351 |
-| `zqreadarc.pas` | `read_archive`: parseo de bloques, segmentos y comentarios JIDAC | 1352–1664 |
-| `zqadd.pas` | `add`: fragmentación, dedup, journaling, `CompressJob`, hilos | 1812–2711 |
+| `zqjidac.pas` | `HT/DT/Block/VER` structures, `usage`, `doCommand` | 943–1351 |
+| `zqreadarc.pas` | `read_archive`: block, segment and JIDAC comment parsing | 1352–1664 |
+| `zqadd.pas` | `add`: fragmentation, dedup, journaling, `CompressJob`, threads | 1812–2711 |
 | `zqextract.pas` | `extract`, `ExtractJob`, `decompressThread`, `equal` | 2712–3506 |
 | `zqlist.pas` | `list` | 3507–3698 |
 | `zqmain.pas` | `main`, WTOU/UTOW, printUTF8 | 236–291, 3699–3737 |
-| `zqthreads.pas` | hilos, mutex, semáforo, cola | 154–235 |
+| `zqthreads.pas` | threads, mutex, semaphore, queue | 154–235 |
 
-## 2. Contrato C↔Pascal
+## 2. C ↔ Pascal contract
 
-Cabecera pública única: `include/zq.h`. Nada más cruza el límite.
+Single public header: `include/zq.h`. Nothing else crosses the boundary.
 
 ```c
-/* Flujos: callbacks en estilo C, `self` opaco del host. */
+/* Streams: C-style callbacks, `self` is opaque host state. */
 typedef struct zq_reader {
-  int     (*get)(void *self);                        /* 0..255, -1 = EOF (obligatorio) */
-  int     (*read)(void *self, char *buf, int n);     /* opcional; NULL = bucle con get() */
+  int     (*get)(void *self);                        /* 0..255, -1 = EOF (required) */
+  int     (*read)(void *self, char *buf, int n);     /* optional; NULL = loop over get() */
   void    *self;
 } zq_reader;
 
 typedef struct zq_writer {
-  void    (*put)(void *self, int c);                 /* obligatorio */
-  void    (*write)(void *self, const char *buf, int n); /* opcional */
+  void    (*put)(void *self, int c);                 /* required */
+  void    (*write)(void *self, const char *buf, int n); /* optional */
   void    *self;
 } zq_writer;
 
-/* Buffer en memoria (equivalente a libzpaq::StringBuffer / MemoryReader). */
+/* Memory buffer (equivalent to libzpaq::StringBuffer / MemoryReader). */
 typedef struct zq_buf zq_buf;
-zq_buf* zq_buf_new(void);
+zq_buf* zq_buf_new(size_t init);
 void    zq_buf_free(zq_buf*);
 void    zq_buf_put(zq_buf*, int c);
 void    zq_buf_write(zq_buf*, const char *p, int n);
-void    zq_buf_clear(zq_buf*);
+void    zq_buf_reset(zq_buf*);
 size_t  zq_buf_size(zq_buf*);
-void    zq_buf_seek(zq_buf*, size_t);   /* posición de lectura para MemoryReader */
+void    zq_buf_seek_read(zq_buf*, size_t);
 int     zq_buf_get(zq_buf*);
 const char *zq_buf_data(zq_buf*);
 ```
 
-SHA/AES/random: células independientes, con init/put/result como upstream.
+SHA/AES/random: standalone units with init/put/result as upstream.
 
-Compresión/descompresión de bloques (lo único que usa el archiver):
+Block compression/decompression (the only part the archiver uses):
 
 ```c
 void zq_compress_block(zq_buf *in, zq_writer *out, const char *method,
@@ -86,65 +86,66 @@ typedef struct zq_decompresser zq_decompresser;
 zq_decompresser* zq_d_new(void);
 void zq_d_free(zq_decompresser*);
 void zq_d_set_input(zq_decompresser*, zq_reader*);
-int  zq_d_find_block(zq_decompresser*, double *mem);     /* 1 = hay bloque */
+int  zq_d_find_block(zq_decompresser*, double *mem);     /* 1 = block found */
 int  zq_d_compressed(zq_decompresser*);
-int  zq_d_decompress(zq_decompresser*, int n);           /* n bytes, -1 = todo */
+int  zq_d_decompress(zq_decompresser*, int n);           /* n bytes, -1 = all */
 int  zq_d_read_segment_end(zq_decompresser*, char *sha1out21, int64_t *size, int verify);
 void zq_d_hcomp(zq_decompresser*, zq_writer*);
 void zq_d_pcomp(zq_decompresser*, zq_writer*);
 ```
 
-## 3. Convenciones de traducción C++ → C
+## 3. C++ → C translation conventions
 
-Se traduce **literal**: mismos nombres, mismo orden de operaciones, mismos tipos con
-ancho fijo. No se "mejora" nada mientras no haya tests que lo respalden.
+Translation is **literal**: same names, same operation order, same fixed-width
+types. Nothing is "improved" while there is no test backing it.
 
 | C++ (upstream) | C (port) |
 |---|---|
 | `class X { ... }` | `typedef struct zq_X { ... } zq_X;` + `zq_x_method(...)` |
-| `Array<T> a(n)` | `zq_u8arr` / `zq_u32arr` (alineados a 64 B, calloc) |
-| `Reader`/`Writer` virtuales | struct de callbacks (§2) |
-| `std::string` | no existe en core; buffers + longitud |
-| `std::vector<T>` | `zq_vec_*` (crece por duplicación) |
-| `throw`/`error()` | `zq_error(msg)` (idéntico al upstream: mensaje a stderr + `exit(1)`) |
+| `Array<T> a(n)` | `zq_arr` (64-byte aligned, calloc'd) + `ZQ_U8A`/`ZQ_U32A` accessors |
+| virtual `Reader`/`Writer` | callback struct (§2) |
+| `std::string` | not used in the core; buffers + length |
+| `std::vector<T>` | `zq_vec_*` (doubling growth) |
+| `throw`/`error()` | `zq_error(msg)` (same message; `exit(1)` if no frame) |
 | `U8/U16/U32/U64` | `uint8_t/uint16_t/uint32_t/uint64_t` |
-| `int` de 32 bits con wrap | `int32_t`/`uint32_t` explícitos; shifts enmascarados a 31/63 |
-| `char` (con signo en x86) | `int8_t`/`uint8_t` explícito en cada uso |
+| 32-bit wrapping `int` | explicit `int32_t`/`uint32_t`; wrapped multiply/add helpers |
+| `char` (signed on x86) | explicit `int8_t`/`uint8_t` at each use |
 
-Reglas duras:
+Hard rules:
 
-1. **Sin UB no intencional**: todo shift con variable se enmascara igual que upstream
-   (`&31` para 32 bits, `&63` para 64); conversiones `double→int64` documentadas.
-2. **Alineación**: los buffers de modelos se alinean a 64 B (upstream lo hace así y
-   los kernels asm lo requieren).
-3. **Endianness**: el formato es little-endian; el código usa memcpy/bytes, nunca
-   punteros a `U32` sobre un stream.
-4. **Errores**: mismos strings y mismo orden de validación que upstream (los tests
-   comparan stderr y exit code).
-5. **Orden de evaluación**: si upstream depende del orden (p. ej. `a=b++;`), se
-   desdobla en sentencias separadas, nunca se deja al compilador.
+1. **No unintended UB:** every variable shift is masked exactly like upstream
+   (`&31` for 32-bit, `&63` for 64-bit); `double→int64` conversions documented;
+   signed overflow is emulated with unsigned arithmetic plus a cast.
+2. **Alignment:** model buffers are 64-byte aligned (upstream does this and the
+   asm kernels require it).
+3. **Endianness:** the format is little-endian; code uses memcpy/byte access,
+   never a `U32*` over a stream.
+4. **Errors:** same strings and same validation order as upstream (tests compare
+   stderr and exit code).
+5. **Evaluation order:** where upstream depends on it (e.g. `a=b++`), statements
+   are split; nothing is left to the compiler.
 
 ## 4. Build
 
 ```
-make            # release: core C (-O3) + host Pascal + asm
-make DEBUG=1    # -O0 -g -fsanitize=address,undefined (core) + -Cr -Co (Pascal)
-make NOJIT=1    # sin JIT, intérprete ZPAQL solamente (portabilidad)
-make test       # unit + diferencial contra oráculo
-make matrix     # matriz completa bit-exacta
-make oracle     # compila upstream en /mnt/IA_LAB/agentes/zpaqII/upstream-zpaq
+make            # release: C core (-O3) + Pascal host + asm
+make DEBUG=1    # -O0 -g -fsanitize=address,undefined (C) + -Cr -Co (Pascal)
+make NOJIT=1    # no JIT, ZPAQL interpreter only (portability)
+make test       # unit + differential vs oracle
+make matrix     # full bit-exact matrix
+make oracle     # clone/build upstream at $UPSTREAM
 ```
 
-El host se compila con `fpc -Mobjfpc -O2 -Sh -vew`; el core con
+The host is built with `fpc -Mobjfpc -O2 -Sh -vew`; the core with
 `gcc -std=c11 -O3 -march=x86-64-v2 -Wall -Wextra -Wshadow`.
 
 ## 5. Tests
 
-- `tests/unit/`: vectores NIST (SHA/AES), tablas de estado, opcodes ZPAQL.
-- `tests/oracle/`: harness C++ compilado contra upstream que vuelca trazas
-  (`p` por bit, `H[]`, bytecode, salida del coder) en formato estable.
-- `tests/diff/`: comparadores (byte a byte y traza) usados por `make test`.
-- `tests/matrix.sh`: matriz de archivos reales (niveles × métodos × opciones).
-- `tests/corpus/`: archivos sintéticos generados por `tests/corpus.sh` con mtime fijo.
+- `tests/unit/`: NIST vectors (SHA/AES), state tables, ZPAQL opcodes.
+- `tests/oracle/` → `tools/oracle/`: C++ harness compiled against upstream that
+  dumps traces (`p` per bit, `H[]`, bytecode, coder output) in a stable format.
+- `tests/diff/`: comparators (byte-for-byte and trace) used by `make test`.
+- `tests/matrix.sh`: real-file matrix (levels × methods × options).
+- `tests/corpus/`: synthetic files generated by `tests/corpus.sh` with fixed mtimes.
 
-Nada de tests "a ojo": todo criterio es binario (cmp / hash / exit code).
+No eyeballing: every criterion is binary (`cmp` / hash / exit code).

@@ -1,52 +1,52 @@
-# Decisiones (ADR)
+# Decisions (ADRs)
 
-## ADR-001 — El oráculo es binario, no la documentación
+## ADR-001 — The oracle is the binary, not the documentation
 
-**Decisión:** la referencia es zpaq 7.15 compilado (commit `9ab539f`) y los criterios
-son binarios: `cmp` de archivos, diff de trazas, exit codes. No se usa la prosa del
-spec como fuente de verdad cuando contradice al binario.
+**Decision:** the reference is compiled zpaq 7.15 (commit `9ab539f`) and the
+criteria are binary: file `cmp`, trace diffs, exit codes. The prose spec is not
+treated as ground truth when it contradicts the binary.
 
-**Consecuencia:** cada etapa agrega un harness que instrumenta el upstream
-(`tools/oracle/`) y un test diferencial. Un módulo se considera terminado sólo cuando
-el diff es vacío. Es lo que permitió detectar, por ejemplo, que `-t1` y `-t4` no
-producen los mismos bytes en `-m4/-m5`.
+**Consequence:** every stage adds a harness that instruments upstream
+(`tools/oracle/`) plus a differential test. A module is done only when the diff
+is empty. This is what revealed, for example, that `-t1` and `-t4` do not produce
+the same bytes for `-m4/-m5`.
 
-## ADR-002 — Reparto Pascal / C / asm
+## ADR-002 — Pascal / C / asm split
 
-**Decisión:** Pascal (FPC) para CLI, archiver, journaling, dedup, hilos e I/O de
-archivos; C11 para el códec (VM ZPAQL, predictor, coder, hashes, postprocesadores);
-asm x86-64 para las rutas calientes y el JIT. Límite único: `include/zq.h`.
+**Decision:** Pascal (FPC) for CLI, archiver, journaling, dedup, threads and file
+I/O; C11 for the codec (ZPAQL VM, predictor, coder, hashes, postprocessors);
+x86-64 asm for hot paths and the JIT. Single boundary: `include/zq.h`.
 
-**Motivos:** el códec necesita control exacto de tipos y aritmética (bit-exactitud) y
-se beneficia del asm; el archiver es lógica de estado con strings, hilos y ficheros,
-donde Pascal es mucho más productivo. El core no conoce archivos ni hilos: sólo
-callbacks `zq_reader`/`zq_writer`.
+**Rationale:** the codec needs exact type and arithmetic control (bit-exactness)
+and benefits from asm; the archiver is state logic with strings, threads and
+files, where Pascal is far more productive. The core knows nothing about files or
+threads: only `zq_reader`/`zq_writer` callbacks.
 
-## ADR-003 — Desenrollado de errores
+## ADR-003 — Error unwinding
 
-**Decisión:** `zq_error()` copia el mensaje y hace `longjmp` a un frame instalado por
-el punto de entrada del core (thread-local). El host nunca ve un `longjmp`: cada
-función del core devuelve estado y `zq_last_error()`.
+**Decision:** `zq_error()` copies the message and `longjmp`s to a frame installed
+by the core entry point (thread-local). The host never sees a `longjmp`: every
+core function returns a status and `zq_last_error()`.
 
-**Motivos:** upstream lanza `std::runtime_error`/`bad_alloc` y `main` lo imprime;
-atravesar frames de Pascal con `longjmp` no es seguro. Todos los saltos ocurren entre
-frames C.
+**Rationale:** upstream throws `std::runtime_error`/`bad_alloc` and `main` prints
+it; unwinding through Pascal frames with `longjmp` is not safe. All jumps happen
+between C frames.
 
-## ADR-004 — Multihilo y bit-exactitud
+## ADR-004 — Threads and bit-exactness
 
-**Decisión:** la bit-exactitud se exige para el mismo `-t` que upstream. El orden de
-escritura de bloques en `-m4/-m5` con `-t>1` depende del planificador; el port debe
-reproducir la misma politica (`CompressJob`, `writeThread`, `Semaphore`), no sólo el
-formato.
+**Decision:** bit-exactness is required for the same `-t` as upstream. Block write
+ordering in `-m4/-m5` with `-t>1` depends on the scheduler; the port must
+reproduce the same policy (`CompressJob`, `writeThread`, `Semaphore`), not just
+the format.
 
-**Verificación:** matriz `-t1` primero, y luego `-t2/-t4/-t8` comparando bytes con
+**Verification:** `-t1` matrix first, then `-t2/-t4/-t8` comparing bytes with
 upstream.
 
-## ADR-005 — Divergencias toleradas
+## ADR-005 — Tolerated divergences
 
-- Un `.zpaq` corrupto produce un mensaje de error limpio (exit 1) donde upstream a
-  veces aborta por `assert`. Se documenta en `docs/DEVIATIONS.md` a medida que
-  aparezcan; se prioriza no crashear ni corromper salida.
-- Los mensajes de error de ejecución ZPAQL difieren en el texto ("Bad ZPAQL opcode"
-  del JIT vs "ZPAQL execution error" del intérprete), pero coinciden en exit code y
-  en el momento de fallar.
+- A corrupt `.zpaq` produces a clean error message (exit 1) where upstream
+  sometimes aborts on `assert`. This is recorded in `docs/DEVIATIONS.md` as cases
+  appear; the priority is to never crash or corrupt output.
+- ZPAQL execution error texts differ ("Bad ZPAQL opcode" from the JIT vs "ZPAQL
+  execution error" from the interpreter), but the exit code and the failure point
+  match.

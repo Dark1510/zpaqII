@@ -1,7 +1,7 @@
-// Oráculo E1: vuelca resultados de SHA-1, SHA-256, AES-CTR, scrypt y
-// stretchKey usando libzpaq 7.15 (upstream) en un formato estable.
-// El test C del port produce exactamente las mismas líneas y se comparan
-// con diff.  No forma parte del binario: sólo herramienta de verificación.
+// E1 oracle: dumps SHA-1, SHA-256, AES-CTR, scrypt and stretchKey results
+// using libzpaq 7.15 (upstream) in a stable format.  The port's C test
+// produces exactly the same lines and they are compared with diff.  Not
+// part of the binary: verification tooling only.
 #include "libzpaq.h"
 
 #include <stdio.h>
@@ -96,7 +96,7 @@ int main() {
     dump_sha256("big", buf, n, 1);
     dump_sha256("big", buf, n, 64);
   }
-  /* vectores conocidos */
+  /* known vectors */
   dump_sha1("abc", "abc", 3, 0);
   dump_sha256("abc", "abc", 3, 0);
   dump_sha1("empty", "", 0, 0);

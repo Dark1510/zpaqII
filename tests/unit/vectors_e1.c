@@ -1,5 +1,5 @@
-/* Verificación E1: mismas líneas que tools/oracle/e1_dump.cpp pero usando el
- * core C del port.  `make test-e1` compara ambas salidas byte a byte. */
+/* E1 check: same lines as tools/oracle/e1_dump.cpp but using the port's C
+ * core.  `make test-e1` compares both outputs byte by byte. */
 #include "zq.h"
 
 #include <stdio.h>
@@ -86,7 +86,7 @@ static void dump_stretch(unsigned seed) {
   printf("\n");
 }
 
-/* Vectores conocidos (FIPS 180).  Falla rápido si el core se desvía. */
+/* Known vectors (FIPS 180).  Fails fast if the core deviates. */
 static void sanity(void) {
   static const char abc_sha1[] = "a9993e364706816aba3e25717850c26c9cd0d89d";
   static const char abc_sha256[] =

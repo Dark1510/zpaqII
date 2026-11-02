@@ -1,5 +1,5 @@
-/* zpaqII — utilidades base del core: errores, memoria alineada, flujos.
- * Port literal de libzpaq 7.15 (Unlicense, Matt Mahoney). */
+/* zpaqII - core base utilities: errors, aligned memory, streams.
+ * Literal port of libzpaq 7.15 (Unlicense, Matt Mahoney). */
 #include "zq.h"
 
 #include <setjmp.h>
@@ -8,7 +8,7 @@
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
-/* Errores                                                             */
+/* Errors                                                              */
 /* ------------------------------------------------------------------ */
 
 static _Thread_local zq_err_frame *zq_top;
@@ -21,7 +21,7 @@ void zq_err_push(zq_err_frame *f) {
 }
 
 void zq_err_pop(zq_err_frame *f) {
-  /* Solo se desapila el frame de arriba; si no coincide es un bug del core. */
+  /* Only the top frame is popped; a mismatch is a core bug. */
   if (zq_top == f) zq_top = f->prev;
   else {
     zq_err_frame *p = zq_top;
@@ -41,14 +41,14 @@ void zq_error(const char *msg) {
     zq_top = f->prev;
     longjmp(f->jb, 1);
   }
-  /* Sin frame activo: mismo comportamiento observable que el ejemplo de
-   * libzpaq.h (mensaje a stderr y exit 1). */
+  /* No active frame: same observable behavior as the libzpaq.h example
+   * (message to stderr and exit 1). */
   fprintf(stderr, "zpaq error: %s\n", msg ? msg : "");
   exit(1);
 }
 
 /* ------------------------------------------------------------------ */
-/* Memoria                                                             */
+/* Memory                                                              */
 /* ------------------------------------------------------------------ */
 
 void *zq_calloc(size_t n) {
@@ -63,8 +63,8 @@ void *zq_realloc(void *p, size_t n) {
   return q;
 }
 
-/* Equivalente literal a libzpaq::Array<T>::resize: libera, asigna
- * 128 + n*elem con calloc y alinea la zona util a 64 bytes. */
+/* Literal equivalent of libzpaq::Array<T>::resize: free, allocate
+ * 128 + n*elem with calloc and align the usable area to 64 bytes. */
 void zq_arr_resize(zq_arr *a, size_t n, size_t elem) {
   if (!a) zq_error("null Array");
   if (a->data) {
@@ -76,7 +76,7 @@ void zq_arr_resize(zq_arr *a, size_t n, size_t elem) {
   a->elem = elem;
   if (n == 0) return;
   {
-    const size_t nb = 128 + n * elem; /* comprobacion de overflow de upstream */
+    const size_t nb = 128 + n * elem; /* upstream overflow check */
     char *p;
     if (nb <= 128 || (nb - 128) / elem != n) zq_error("Array too big");
     p = (char *)calloc(nb, 1);
@@ -96,7 +96,7 @@ void zq_arr_free(zq_arr *a) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Flujos por defecto                                                  */
+/* Default streams                                                     */
 /* ------------------------------------------------------------------ */
 
 int zq_reader_read(zq_reader *r, char *buf, int n) {

@@ -1,35 +1,38 @@
 # zpaqII
 
-Port de **zpaq 7.15** (github.com/zpaq/zpaq, Unlicense) a **Pascal + C + asm x86-64**,
-con compatibilidad **bit-exacta** con el original como criterio de aceptación.
+Port of **zpaq 7.15** (github.com/zpaq/zpaq, Unlicense) to **Pascal + C + x86-64
+assembly**, with **bit-exact** compatibility with the original as the acceptance
+criterion.
 
-- `docs/PLAN.md` — etapas, criterios de aceptación, riesgos.
-- `docs/ARCHITECTURE.md` — mapa de módulos, contrato C↔Pascal, convenciones de port.
+- `docs/PLAN.md` — stages, acceptance criteria, risks.
+- `docs/ARCHITECTURE.md` — module map, C↔Pascal contract, porting conventions.
+- `docs/DECISIONS.md` — ADRs (oracle, language split, error handling, threads).
 
-## Estado
+## Status
 
-| etapa | contenido | estado |
+| stage | content | state |
 |---|---|---|
-| E0 | infra, oráculo (upstream compilado), corpus | ✅ |
-| E1 | SHA-1, SHA-256, AES-256-CTR, scrypt/stretchKey, random | ✅ idéntico al oráculo (357 casos) |
-| E2 | VM ZPAQL + compilador de configs | ✅ idéntico (bytecode y trazas); JIT pendiente |
-| E3 | predictor, coder aritmético | pendiente |
-| E4 | contenedor, postprocesadores, LZ77/BWT, makeConfig | pendiente |
-| E5 | archiver JIDAC en Pascal | pendiente |
-| E6 | matriz bit-exacta, fuzzing, performance | pendiente |
+| E0 | infrastructure, oracle (upstream build), corpus | ✅ |
+| E1 | SHA-1, SHA-256, AES-256-CTR, scrypt/stretchKey, random | ✅ identical to oracle (357 cases) |
+| E2 | ZPAQL VM + config compiler | ✅ identical (bytecode and traces); JIT pending |
+| E3 | predictor, arithmetic coder | in progress |
+| E4 | container, postprocessors, LZ77/BWT, makeConfig | pending |
+| E5 | JIDAC archiver in Pascal | pending |
+| E6 | bit-exact matrix, fuzzing, performance | pending |
 
 ## Build
 
 ```
-make            # core C + tests
-make test       # diferencial contra el upstream de referencia
+make            # C core + tests
+make test       # differential tests against the reference upstream
 make DEBUG=1    # ASan/UBSan
-make NOJIT=1    # sin JIT (sólo intérprete ZPAQL)
+make NOJIT=1    # no JIT (ZPAQL interpreter only)
+make oracle     # clone and build the reference upstream
 ```
 
-El upstream de referencia se clona en `$UPSTREAM`
-(por defecto `/mnt/IA_LAB/agentes/zpaqII/upstream-zpaq`) y se compila con `make oracle`.
+The reference upstream is cloned into `$UPSTREAM`
+(default `/mnt/IA_LAB/agentes/zpaqII/upstream-zpaq`).
 
-## Licencia
+## License
 
-Unlicense, igual que upstream. `divsufsort` conserva su licencia MIT.
+Unlicense, same as upstream. `divsufsort` keeps its MIT license.

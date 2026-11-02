@@ -1,12 +1,12 @@
-/* zpaqII — compilador ZPAQL (texto -> bytecode).
- * Port de libzpaq::Compiler (Unlicense, Matt Mahoney). */
+/* zpaqII - ZPAQL compiler (text -> bytecode).
+ * Port of libzpaq::Compiler (Unlicense, Matt Mahoney). */
 #include "zq_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* Tipo de componente y opcodes del Compiler. */
+/* Component types and opcodes used by the Compiler. */
 enum {
   NONE = 0, CONS = 1, CM = 2, ICM = 3, MATCH = 4, AVG = 5, MIX2 = 6, MIX = 7,
   ISSE = 8, SSE = 9,
@@ -97,7 +97,7 @@ static int zq_tolower(int ch) {
   return (ch >= 'A' && ch <= 'Z') ? ch + 'a' - 'A' : ch;
 }
 
-/* true si in==word hasta blanco o '(', sin distinguir mayusculas */
+/* true if in==word up to whitespace or '(', case insensitive */
 static int zq_match_token(const zq_comp_ctx *c, const char *word) {
   const char *a = c->in;
   for (; (*a > ' ' && *a != '(' && *word); ++a, ++word)
@@ -142,7 +142,7 @@ static void zq_rtoken_str(zq_comp_ctx *c, const char *s) {
   if (!zq_match_token(c, s)) zq_syntax_error(c, "expected", s);
 }
 
-/* Lee un numero en [low..high].  Para "$N+M" devuelve args[N-1]+M. */
+/* Reads a number in [low..high].  For "$N+M" returns args[N-1]+M. */
 static int zq_rtoken_num(zq_comp_ctx *c, int low, int high) {
   int r = 0;
   zq_next(c);
@@ -169,7 +169,7 @@ static zq_u16 zq_pop(zq_u16 *s, size_t *top) {
   return s[--(*top)];
 }
 
-/* Compila HCOMP o PCOMP.  Devuelve el token final (POST, PCOMP, END). */
+/* Compiles HCOMP or PCOMP.  Returns the final token (POST, PCOMP, END). */
 static int zq_compile_comp(zq_comp_ctx *c, zq_zpaql *z) {
   int op = 0;
   const int comp_begin = z->hend;
@@ -251,7 +251,7 @@ static int zq_compile_comp(zq_comp_ctx *c, zq_zpaql *z) {
         operand = j & 255;
         operand2 = j >> 8;
       }
-    } else if ((op & 7) == 7) { /* operando de 2 bytes */
+    } else if ((op & 7) == 7) { /* two-byte operand */
       if (op == LJ) {
         operand = zq_rtoken_num(c, 0, 65535);
         operand2 = operand >> 8;
@@ -314,7 +314,7 @@ void zq_compile(const char *in, int *args, zq_zpaql *hz, zq_zpaql *pz,
     for (j = 1; j < clen; ++j)
       ZQ_HDR(hz, hz->cend++) = (zq_u8)zq_rtoken_num(&c, 0, 255);
   }
-  ++hz->cend; /* COMP END (byte ya a 0) */
+  ++hz->cend; /* COMP END (byte already 0) */
   hz->hbegin = hz->hend = hz->cend + 128;
 
   /* HCOMP */
@@ -336,7 +336,7 @@ void zq_compile(const char *in, int *args, zq_zpaql *hz, zq_zpaql *pz,
     pz->cend = 8;
     pz->hbegin = pz->hend = pz->cend + 128;
 
-    /* pcomp_cmd termina en ';' (sensible a mayusculas) */
+    /* pcomp_cmd ends with ';' (case sensitive) */
     zq_next(&c);
     while (*c.in && *c.in != ';') {
       if (c.out2) c.out2->put(c.out2->self, (zq_u8)*c.in);

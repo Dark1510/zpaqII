@@ -1,5 +1,5 @@
-/* zpaqII — VM ZPAQL: ciclo de vida, headers, ejecucion interpretada.
- * Port de libzpaq 7.15 (Unlicense, Matt Mahoney). */
+/* zpaqII - ZPAQL VM: lifecycle, headers, interpreted execution.
+ * Port of libzpaq 7.15 (Unlicense, Matt Mahoney). */
 #include "zq_internal.h"
 
 #include <stdio.h>
@@ -7,7 +7,7 @@
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
-/* Ciclo de vida                                                       */
+/* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
 void zq_zpaql_clear(zq_zpaql *z) {
@@ -98,7 +98,7 @@ int zq_zpaql_read(zq_zpaql *z, zq_reader *in2) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Ejecucion                                                           */
+/* Execution                                                           */
 /* ------------------------------------------------------------------ */
 
 static void zq_zpaql_err(void) { zq_error("ZPAQL execution error"); }

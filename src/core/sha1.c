@@ -1,4 +1,4 @@
-/* zpaqII — SHA-1.  Port de libzpaq 7.15 (Unlicense, Matt Mahoney). */
+/* zpaqII - SHA-1.  Port of libzpaq 7.15 (Unlicense, Matt Mahoney). */
 #include "zq.h"
 
 #include <string.h>
@@ -17,7 +17,7 @@ void zq_sha1_init(zq_sha1 *s) {
   memset(s->w, 0, sizeof(s->w));
 }
 
-/* Procesa un bloque de 64 bytes ya cargado en w[]. */
+/* Processes one 64-byte block already loaded into w[]. */
 static void sha1_process(zq_sha1 *s) {
   zq_u32 a = s->h[0], b = s->h[1], c = s->h[2], d = s->h[3], e = s->h[4];
   static const zq_u32 k[4] = {0x5A827999u, 0x6ED9EBA1u, 0x8F1BBCDCu,

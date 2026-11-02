@@ -1,4 +1,4 @@
-/* zpaqII — SHA-256.  Port de libzpaq 7.15 (Unlicense, Matt Mahoney). */
+/* zpaqII - SHA-256.  Port of libzpaq 7.15 (Unlicense, Matt Mahoney). */
 #include "zq.h"
 
 #include <string.h>

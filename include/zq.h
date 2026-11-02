@@ -1,10 +1,10 @@
-/* zpaqII — core C API.  Cabecera publica unica (ver docs/ARCHITECTURE.md).
+/* zpaqII - core C API.  Single public header (see docs/ARCHITECTURE.md).
  *
- * Port de libzpaq 7.15 (dominio publico / Unlicense, Matt Mahoney).
- * divsufsort conserva su licencia MIT.
+ * Port of libzpaq 7.15 (public domain / Unlicense, Matt Mahoney).
+ * divsufsort keeps its MIT license.
  *
- * Reglas: tipos con ancho fijo, sin UB no documentado, mismos mensajes de
- * error que upstream, ningun acceso a archivos (todo pasa por callbacks).
+ * Rules: fixed-width types, no undocumented UB, same error messages as
+ * upstream, no file access (everything goes through callbacks).
  */
 #ifndef ZPAQII_ZQ_H
 #define ZPAQII_ZQ_H 1
@@ -18,7 +18,7 @@ extern "C" {
 #endif
 
 /* ------------------------------------------------------------------ */
-/* Tipos                                                               */
+/* Types                                                               */
 /* ------------------------------------------------------------------ */
 
 typedef uint8_t  zq_u8;
@@ -30,12 +30,12 @@ typedef int64_t  zq_i64;
 #define ZQ_NORETURN __attribute__((noreturn))
 
 /* ------------------------------------------------------------------ */
-/* Errores                                                             */
+/* Errors                                                              */
 /*                                                                     */
-/* Upstream lanza std::runtime_error (bad_alloc si el mensaje contiene  */
-/* "out of memory") y main() lo imprime y sale con 1.  El core no puede */
-/* desenrollar a traves de Pascal, asi que cada punto de entrada        */
-/* establece un frame y devuelve estado; el host lee el mensaje.        */
+/* Upstream throws std::runtime_error (bad_alloc when the message has   */
+/* "out of memory") and main() prints it and exits with 1.  The core    */
+/* cannot unwind through Pascal, so every entry point installs a frame  */
+/* and returns a status; the host reads the message.                    */
 /* ------------------------------------------------------------------ */
 
 typedef struct zq_err_frame {
@@ -44,39 +44,39 @@ typedef struct zq_err_frame {
   jmp_buf jb;
 } zq_err_frame;
 
-/* Patron obligatorio en cada punto de entrada del core:
+/* Mandatory pattern at every core entry point:
  *
  *   zq_err_frame ef;
- *   if (setjmp(ef.jb)) return -1;      // error: el frame ya fue desapilado
+ *   if (setjmp(ef.jb)) return -1;      // error: the frame is already popped
  *   zq_err_push(&ef);
- *   ... llamadas al core ...
+ *   ... core calls ...
  *   zq_err_pop(&ef);
  *   return 0;
  *
- * zq_error() copia el mensaje, desapila el frame y longjmp.  Como el salto
- * ocurre integramente dentro de frames C, no atraviesa Pascal.
+ * zq_error() copies the message, pops the frame and longjmps.  The jump
+ * happens entirely inside C frames, so it never crosses Pascal.
  */
 void zq_err_push(zq_err_frame *f);
 void zq_err_pop(zq_err_frame *f);
-const char *zq_last_error(void);   /* mensaje del ultimo error del hilo */
+const char *zq_last_error(void);   /* last error message of this thread */
 
-/* Nunca retorna.  Sin frame activo imprime "zpaq error: <msg>" y exit(1). */
+/* Never returns.  With no active frame it prints "zpaq error: <msg>" and exits(1). */
 void zq_error(const char *msg) ZQ_NORETURN;
 
 /* ------------------------------------------------------------------ */
-/* Memoria                                                             */
+/* Memory                                                              */
 /* ------------------------------------------------------------------ */
 
-void *zq_calloc(size_t n);            /* cero-inicializado; error si falla */
+void *zq_calloc(size_t n);            /* zero-filled; error on failure */
 void *zq_realloc(void *p, size_t n);
 
-/* Equivalente a libzpaq::Array<T>: buffer alineado a 64 bytes, siempre
- * cero-inicializado, `n` elementos de `elem` bytes. */
+/* Equivalent to libzpaq::Array<T>: 64-byte aligned buffer, always
+ * zero-filled, `n` elements of `elem` bytes each. */
 typedef struct zq_arr {
-  void  *data;    /* zona util, alineada a 64 */
-  size_t n;       /* numero de elementos */
-  int    offset;  /* bytes desde la asignacion hasta data */
-  size_t elem;    /* tamano de elemento */
+  void  *data;    /* usable area, 64-byte aligned */
+  size_t n;       /* number of elements */
+  int    offset;  /* bytes from allocation start to data */
+  size_t elem;    /* element size */
 } zq_arr;
 
 void zq_arr_resize(zq_arr *a, size_t n, size_t elem);
@@ -86,27 +86,27 @@ void zq_arr_free(zq_arr *a);
 #define ZQ_U32A(a, i) (((zq_u32 *)(a)->data)[(i)])
 
 /* ------------------------------------------------------------------ */
-/* Flujos (Reader/Writer)                                              */
+/* Streams (Reader/Writer)                                             */
 /* ------------------------------------------------------------------ */
 
 typedef struct zq_reader {
   int  (*get)(void *self);                       /* 0..255, -1 = EOF */
-  int  (*read)(void *self, char *buf, int n);    /* opcional (NULL = get) */
+  int  (*read)(void *self, char *buf, int n);    /* optional (NULL = get) */
   void  *self;
 } zq_reader;
 
 typedef struct zq_writer {
   void (*put)(void *self, int c);
-  void (*write)(void *self, const char *buf, int n); /* opcional (NULL) */
+  void (*write)(void *self, const char *buf, int n); /* optional (NULL) */
   void  *self;
 } zq_writer;
 
-/* Implementaciones por defecto de read()/write() sobre get()/put(). */
+/* Default read()/write() built on get()/put(). */
 int  zq_reader_read(zq_reader *r, char *buf, int n);
 void zq_writer_write(zq_writer *w, const char *buf, int n);
 
 /* ------------------------------------------------------------------ */
-/* Buffer en memoria (libzpaq::StringBuffer)                           */
+/* In-memory buffer (libzpaq::StringBuffer)                            */
 /* ------------------------------------------------------------------ */
 
 typedef struct zq_buf zq_buf;
@@ -118,20 +118,20 @@ size_t  zq_buf_size(const zq_buf *b);
 size_t  zq_buf_remaining(const zq_buf *b);
 void    zq_buf_reset(zq_buf *b);
 void    zq_buf_put(zq_buf *b, int c);
-void    zq_buf_write(zq_buf *b, const char *p, int n);  /* p NULL = solo avanza */
+void    zq_buf_write(zq_buf *b, const char *p, int n);  /* p NULL = advance only */
 int     zq_buf_get(zq_buf *b);
-int     zq_buf_read(zq_buf *b, char *p, int n);         /* p NULL = solo avanza */
+int     zq_buf_read(zq_buf *b, char *p, int n);         /* p NULL = advance only */
 void    zq_buf_resize(zq_buf *b, size_t n);
 void    zq_buf_swap(zq_buf *a, zq_buf *b);
 const char *zq_buf_data(const zq_buf *b);
 void    zq_buf_seek_read(zq_buf *b, size_t pos);
 
-/* Adaptadores Reader/Writer sobre un zq_buf. */
+/* Reader/Writer adapters over a zq_buf. */
 zq_reader zq_buf_reader(zq_buf *b);
 zq_writer zq_buf_writer(zq_buf *b);
 
 /* ------------------------------------------------------------------ */
-/* SHA-1 (checksums de bloque/segmento y dedup)                        */
+/* SHA-1 (block/segment checksums and dedup)                           */
 /* ------------------------------------------------------------------ */
 
 typedef struct zq_sha1 {
@@ -167,7 +167,7 @@ double      zq_sha256_size(const zq_sha256 *s);
 zq_u64      zq_sha256_usize(const zq_sha256 *s);
 
 /* ------------------------------------------------------------------ */
-/* AES-256 en modo CTR (clave de archivo)                              */
+/* AES-256 in CTR mode (archive key)                                   */
 /* ------------------------------------------------------------------ */
 
 typedef struct zq_aes_ctr {

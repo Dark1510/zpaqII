@@ -1,11 +1,11 @@
-# zpaqII — build del port (host Pascal + core C + asm)
+# zpaqII - port build (Pascal host + C core + asm)
 #
-#   make            core C + tests
-#   make test       unit + diferencial contra upstream
-#   make oracle     compila el upstream de referencia (binario oraculo)
-#   make NOJIT=1    core sin JIT (solo interprete ZPAQL)
+#   make            C core + tests
+#   make test       unit + differential tests vs upstream
+#   make oracle     clone/build the reference upstream (oracle binary)
+#   make NOJIT=1    core without JIT (ZPAQL interpreter only)
 #
-# El host Pascal se agrega en la etapa E5 (ver docs/PLAN.md).
+# The Pascal host is added in stage E5 (see docs/PLAN.md).
 
 CC       ?= gcc
 CXX      ?= g++

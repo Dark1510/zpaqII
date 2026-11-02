@@ -1,201 +1,210 @@
-# zpaqII — plan del port
+# zpaqII — port plan
 
-Port de **zpaq 7.15** (github.com/zpaq/zpaq, Unlicense) a **Pascal (host) + C (core) + asm x86-64 (rutas calientes)**.
+Port of **zpaq 7.15** (github.com/zpaq/zpaq, Unlicense) to **Pascal (host) + C
+(core) + x86-64 assembly (hot paths)**.
 
-Referencia congelada: commit `9ab539f` ("Fixes incorrect JIT assembly of \"a+= 128\"...").
-Copia de trabajo: `/mnt/IA_LAB/agentes/zpaqII/upstream-zpaq` (binario oráculo incluido).
-
----
-
-## 1. Objetivo y criterio de aceptación
-
-**Objetivo:** compatibilidad **bit-exacta total** con zpaq 7.15.
-
-Se considera cumplido cuando se verifican las cuatro propiedades, para cada caso de la matriz:
-
-1. **Extract:** un `.zpaq` producido por upstream se extrae con zpaqII byte a byte igual.
-2. **Add:** con la misma entrada, mismas fechas/atributos, mismas opciones y mismo `-t`,
-   zpaqII produce un `.zpaq` **idéntico byte a byte** al de upstream.
-3. **Cross:** cada dirección anterior se prueba también al revés (zpaqII add → upstream extract,
-   upstream add → zpaqII extract).
-4. **CLI:** mismos comandos/opciones/comportamiento observable (mensajes, códigos de salida,
-   `list`, `-until`, `-index`, multi-parte, cifrado).
-
-Matriz mínima: `-m0..-m5`, `-method x1..x14,i1..i6,s1..s7` (subconjunto representativo),
-con y sin `-t`, dedup entre versiones, `-until`, `-key`, multi-parte, nombres UTF-8,
-archivos vacíos, binarios, texto, ya comprimidos, y > 1 bloque.
-
-**Nota sobre hilos:** `-t4` y `-t1` **no** producen los mismos bytes en `-m4/-m5`
-(verificado: mismo tamaño, contenido distinto). El criterio bit-exacto se exige
-**para el mismo número de hilos que upstream**. Reproducir el orden de escritura
-multihilo es parte del port (ver §5, riesgo R3).
+Frozen reference: commit `9ab539f` ("Fixes incorrect JIT assembly of \"a+= 128\"...").
+Working copy: `/mnt/IA_LAB/agentes/zpaqII/upstream-zpaq` (oracle binary included).
 
 ---
 
-## 2. Arquitectura
+## 1. Goal and acceptance criteria
+
+**Goal:** **bit-exact** compatibility with zpaq 7.15.
+
+The project is done when all four properties hold for every case in the matrix:
+
+1. **Extract:** a `.zpaq` produced by upstream extracts with zpaqII byte for byte.
+2. **Add:** with the same input, timestamps/attributes, options and `-t`, zpaqII
+   produces a **byte-identical** `.zpaq`.
+3. **Cross:** each direction is also tested the other way (zpaqII add → upstream
+   extract, upstream add → zpaqII extract).
+4. **CLI:** same commands/options/observable behavior (messages, exit codes,
+   `list`, `-until`, `-index`, multi-part, encryption).
+
+Minimum matrix: `-m0..-m5`, `-method x1..x14,i1..i6,s1..s7` (representative
+subset), with and without `-t`, dedup across versions, `-until`, `-key`,
+multi-part, UTF-8 names, empty files, binaries, text, already-compressed data,
+and inputs larger than one block.
+
+**Thread note:** `-t4` and `-t1` do **not** produce the same bytes in `-m4/-m5`
+(verified: same size, different content). Bit-exactness is therefore required
+**for the same thread count as upstream**. Reproducing the multithreaded write
+order is part of the port (see §5, risk R3).
+
+---
+
+## 2. Architecture
 
 ```
                  ┌──────────────────────────────────────────────┐
    CLI / archiver│  Pascal (FPC 3.2.2)  host/                   │
    journaling    │  cli, scan, dedup, index, add/list/extract,  │
-   I/O, hilos    │  hilos, cifrado de archivo, multi-parte      │
+   I/O, threads  │  threads, archive encryption, multi-part     │
                  └───────────────┬──────────────────────────────┘
-                                 │ C ABI (callbacks Reader/Writer)
+                                 │ C ABI (Reader/Writer callbacks)
                  ┌───────────────┴──────────────────────────────┐
-   códec         │  C (gcc 14, -std=c11)  core/                │
-   VM ZPAQL      │  sha1/256, aes, state table, zpaql (asm+VM), │
-   predictor     │  predictor, coder aritmético, postproc,      │
-   coder         │  config/method, divsufsort, JIT x86-64       │
+   codec         │  C (gcc 14, -std=c11)  core/                │
+   ZPAQL VM      │  sha1/256, aes, state table, zpaql (asm+VM), │
+   predictor     │  predictor, arithmetic coder, postproc,      │
+   coder         │  config/method, divsufsort, x86-64 JIT       │
                  └───────────────┬──────────────────────────────┘
                                  │
                  ┌───────────────┴──────────────────────────────┐
-   rutas         │  asm/  (GAS, Intel syntax)                   │
-   calientes     │  coder, update de modelos, memcpy/bit ops,   │
-                 │  plantillas del JIT                          │
+   hot paths     │  asm/  (GAS, Intel syntax)                   │
+                 │  coder, model updates, memcpy/bit ops,       │
+                 │  JIT templates                               │
                  └──────────────────────────────────────────────┘
 ```
 
-Regla de oro de la separación: **el core C no conoce archivos ni hilos**; sólo flujos
-(`zq_reader`/`zq_writer`), buffers y parámetros. El host Pascal no conoce el formato
-comprimido; sólo bloques, segmentos y la API del core.
+Golden rule of the split: **the C core knows nothing about files or threads**;
+it only sees streams (`zq_reader`/`zq_writer`), buffers and parameters. The
+Pascal host knows nothing about the compressed format; only blocks, segments and
+the core API.
 
-### Contrato C (equivalente a libzpaq.h)
+### C contract (equivalent to libzpaq.h)
 
-La superficie que el archiver necesita de libzpaq es chica (medida con grep sobre zpaq.cpp):
+The surface the archiver needs from libzpaq is small (measured with grep over
+`zpaq.cpp`):
 
-| API | uso en zpaq.cpp |
+| API | use in zpaq.cpp |
 |---|---|
-| `Reader` / `Writer` | I/O de archivo y buffers |
-| `StringBuffer` | acumular fragmentos antes de comprimir |
-| `SHA1` | checksums de bloque/segmento y dedup |
-| `AES_CTR`, `stretchKey`, `random` | cifrado |
-| `Decompresser` (`findBlock`, `setInput`, `decompress`, `readSegmentEnd`, `getMemory`, `hcomp`, `pcomp`) | extraer/listar |
-| `compressBlock(StringBuffer*, Writer*, method, filename, comment, dosha1)` | comprimir un bloque |
-| `Array` | buffers alineados a 64 bytes |
+| `Reader` / `Writer` | file and buffer I/O |
+| `StringBuffer` | accumulate fragments before compressing |
+| `SHA1` | block/segment checksums and dedup |
+| `AES_CTR`, `stretchKey`, `random` | encryption |
+| `Decompresser` (`findBlock`, `setInput`, `decompress`, `readSegmentEnd`, `getMemory`, `hcomp`, `pcomp`) | extract/list |
+| `compressBlock(StringBuffer*, Writer*, method, filename, comment, dosha1)` | compress one block |
+| `Array` | 64-byte aligned buffers |
 
-Todo lo demás (Predictor, ZPAQL, Compiler, divsufsort) es interno del core.
+Everything else (Predictor, ZPAQL, Compiler, divsufsort) is internal to the core.
 
 ---
 
-## 3. Etapas
+## 3. Stages
 
-Cada etapa deja el árbol compilando y con tests verdes. El orden está pensado para
-que el oráculo (upstream) valide lo antes posible.
+Every stage leaves the tree building and the tests green. The ordering aims to
+let the oracle (upstream) validate each piece as early as possible.
 
-### E0 — Infraestructura y oráculo
-- Layout del repo, `Makefile`, `docs/` (este plan, ARCHITECTURE, ADRs).
-- `tools/oracle/`: build del upstream + harness instrumentado que vuelca estados
-  intermedios (bytecode compilado, tablas de estado, predicciones p, H[], salida del
-  coder) como texto/binario para comparar contra el core C.
-- Generador de corpus reproducible (`tests/corpus.sh`): ficheros sintéticos con mtime
-  fijo + muestras de `/mnt/OSR_D3/fileFormatSamples` (copiadas, nunca in situ).
-- `tests/run.sh`: matriz de comparación (hash de archivo, `cmp`, exit codes).
-- **Aceptación:** `make oracle && make corpus && make test` corre y falla sólo porque
-  el port aún no existe.
+### E0 — Infrastructure and oracle ✅
+- Repo layout, `Makefile`, `docs/` (this plan, ARCHITECTURE, ADRs).
+- `tools/oracle/`: upstream build plus instrumented harnesses that dump
+  intermediate states (compiled bytecode, state tables, predictions `p`, `H[]`,
+  coder output) as stable text.
+- Reproducible corpus generator (`tests/corpus.sh`): synthetic files with fixed
+  mtimes plus samples from `/mnt/OSR_D3/fileFormatSamples` (copied, never in place).
+- `tests/run.sh`: comparison matrix (file hash, `cmp`, exit codes).
+- **Acceptance:** `make oracle && make test` runs and fails only because the port
+  does not exist yet. *(done)*
 
-### E1 — Primitivas deterministas (C)
-- `sha1.c`, `sha256.c`, `aes.c` (+ `stretchkey`), `random.c`, `array.c` (buffers 64B,
-  cero-inicializado), manejo de error compatible (`zq_error` → exit 1).
-- **Aceptación:** vectores conocidos (NIST/FIPS) + comparación byte a byte con el
-  harness del oráculo para claves/tamaños aleatorios y `stretchKey` (100k iteraciones
-  en upstream → PBKDF2-SHA256 propio de zpaq).
+### E1 — Deterministic primitives (C) ✅
+- `sha1.c`, `sha256.c`, `aes.c` (+ `stretchkey`), `random.c`, `buffer.c`
+  (64-byte buffers, zero-filled), upstream-compatible error handling
+  (`zq_error` → exit 1 when no frame is installed).
+- **Acceptance:** known vectors (NIST/FIPS) plus byte-for-byte comparison against
+  the oracle harness for random keys/sizes and `stretchKey` (100k iterations in
+  upstream → zpaq's own PBKDF2-SHA256). *(done: 357 cases identical)*
 
-### E2 — VM ZPAQL (C + asm)
-- `zpaql_asm.c`: compilador de texto ZPAQL → bytecode (`OPCODES`/table de upstream,
-  `Compiler::compile`), incluido `pcomp` y comentarios.
-- `zpaql_vm.c`: intérprete `run0`/`run` con la semántica exacta (A/B/C/D/R/H/X,
-  saltos, `HASH`, `OUT`, `HALT`, wrap de 32 bits, `A<<=X` con `X&31`, etc.).
-- `asm/zpaql_jit_x86_64.S` + `jit.c`: traducción a código máquina por bloque
-  (equivalente a `ZPAQL::assemble`), con fallback al intérprete (`NOJIT`).
-- **Aceptación:** para todos los configs de `-m0..-m5` y `-method ...`, el bytecode
-  compilado es idéntico al del oráculo; ejecutar HCOMP/PCOMP y comparar `H[]`,
-  salidas y tiempos. Diferencial: intérprete ≡ JIT en 10^6 pasos aleatorios.
+### E2 — ZPAQL VM (C + asm)
+- `zpaql_asm.c`: ZPAQL text → bytecode compiler (`OPCODES`/upstream table,
+  `Compiler::compile`), including `pcomp` and comments.
+- `zpaql.c`: `run0`/`run` interpreter with exact semantics (A/B/C/D/R/H/X,
+  jumps, `HASH`, `OUT`, `HALT`, 32-bit wrap, `A<<=X` with `X&31`, etc.).
+- `asm/zpaql_jit_x86_64.S` + `jit.c`: per-block translation to machine code
+  (equivalent to `ZPAQL::assemble`), with an interpreter fallback (`NOJIT`).
+- **Acceptance:** for every config of `-m0..-m5` and `-method ...`, compiled
+  bytecode is identical to the oracle; HCOMP/PCOMP execution matches `H[]`,
+  outputs and timings. Differential: interpreter ≡ JIT over 10^6 random steps.
+- **Status:** compiler + interpreter ✅ (26 configs, bytecode and traces
+  identical). JIT pending.
 
-### E3 — Predictor y coder (C + asm)
+### E3 — Predictor and coder (C + asm)
 - `state.c` (StateTable), `component.c` (CONS/CM/ICM/MATCH/AVG/MIX2/MIX/ISSE/SSE),
   `predictor.c` (init/update/predict, hmap4, c8, nibble boundaries, `MATCH` buffer).
-- `coder.c`: `Decoder` y `Encoder` (range coder carryless), `decode(0)` = EOS.
-- `asm/coder_x86_64.S` y `asm/model_x86_64.S`: inner loops (ver §4).
-- **Aceptación:** traza por byte de `p` y de `c0` idéntica al oráculo en los 5 niveles;
-  decodificar bloques sueltos del oráculo bit a bit.
+- `coder.c`: `Decoder` and `Encoder` (carryless range coder), `decode(0)` = EOS.
+- `asm/coder_x86_64.S` and `asm/model_x86_64.S`: inner loops (see §4).
+- **Acceptance:** per-bit trace of `p` and `c0` identical to the oracle on all 5
+  levels; decode oracle blocks bit for bit; encoded streams byte-identical.
 
-### E4 — Contenedor y API de alto nivel (C)
-- `decompresser.c` (findBlock, headers, HCOMP/PCOMP, verificación SHA-1, memoria),
-  `postproc.c` (lazy2, E8E9, BWT!) — el BWT del nivel 2 exige prestar atención al
-  modelo de contexto de bytes (`bwt` en pcomp).
-- `compressor.c` (`compressBlock`), `config.c` (`makeConfig` textual de todos los
-  niveles/métodos), `method.c` (parseo `x/i/s/0` + args), `divsufsort.c` (port del
-  embebido, C puro, sin cambios de semántica).
-- **Aceptación:** round-trip de los 5 niveles + `compressBlock` bit-exacto contra
-  upstream para el corpus; verificación SHA-1 de bloques corruptos debe fallar igual.
+### E4 — Container and high-level API (C)
+- `decompresser.c` (findBlock, headers, HCOMP/PCOMP, SHA-1 verify, memory),
+  `postproc.c` (lazy2, E8E9, BWT) — the level-2 BWT is handled by a pcomp program
+  (`bwtrle`).
+- `compressor.c` (`compressBlock`), `config.c` (`makeConfig` text for every
+  level/method), `method.c` (`x/i/s/0` parsing + args), `divsufsort.c` (port of
+  the embedded one, plain C, unchanged semantics).
+- **Acceptance:** round-trip of all 5 levels + bit-identical `compressBlock`
+  against upstream over the corpus; corrupted blocks must fail SHA-1 the same way.
 
 ### E5 — Archiver (Pascal)
-- `fio.pas` (file layer, fechas/atributos win/unix), `archive.pas` (Input/OutputArchive,
-  multi-parte, seeks), `scan.pas` (scandir, symlinks, exclusiones `-not`, `-only`),
-  `readarc.pas` (lectura del índice JIDAC: `jDC\x01`, bloques de fragmentos),
-  `add.pas` (fragmentación, dedup SHA-1, journaling, versiones, `-until`),
-  `extract.pas`, `list.pas`, `index.pas`, `cli.pas`, `threads.pas` (pool + semáforos
-  con la misma política de orden que upstream).
-- **Aceptación:** matriz completa de E6 sobre comandos y opciones, incluidos
-  `-key`, multi-parte, `-until`, `-fragment`, `-index`, y errores/exit codes.
+- `fio.pas` (file layer, dates/attributes win/unix), `archive.pas`
+  (Input/OutputArchive, multi-part, seeks), `scan.pas` (scandir, symlinks,
+  `-not`, `-only`), `readarc.pas` (JIDAC index parsing: `jDC\x01`, fragment
+  blocks), `add.pas` (fragmentation, SHA-1 dedup, journaling, versions,
+  `-until`), `extract.pas`, `list.pas`, `index.pas`, `cli.pas`, `threads.pas`
+  (pool + semaphores with the same ordering policy as upstream).
+- **Acceptance:** full E6 matrix over commands and options, including `-key`,
+  multi-part, `-until`, `-fragment`, `-index`, and error/exit-code behavior.
 
-### E6 — Verificación total y performance
-- `tests/matrix.sh`: matriz cruzada de 2 direcciones × niveles × métodos × opciones.
-- Fuzzing diferencial del decoder (archivos truncados/corruptos: mismo mensaje de
-  error y mismo exit code que upstream, sin crashes ni leaks).
-- Benchmarks: ratio idéntico (garantizado por bit-exactitud) y velocidad objetivo
-  ≥ 90 % de upstream en `-m1/-m2`; análisis con `perf` de los loops asm.
-- Sanitizers: `-fsanitize=address,undefined` en core C; `-Cr -Co` en Pascal para CI
-  (sin afectar el binario release).
-- **Aceptación:** matriz 100 % verde, sin warnings con `-Wall -Wextra`, valgrind/ASan
-  limpio en decode de corpus.
+### E6 — Full verification and performance
+- `tests/matrix.sh`: cross matrix, both directions × levels × methods × options.
+- Differential fuzzing of the decoder (truncated/corrupt archives: same error
+  message and exit code as upstream, no crashes, no leaks).
+- Benchmarks: identical ratio (guaranteed by bit-exactness) and speed target
+  ≥ 90 % of upstream for `-m1/-m2`; `perf` analysis of the asm loops.
+- Sanitizers: `-fsanitize=address,undefined` on the C core; `-Cr -Co` on Pascal
+  for CI (never for release binaries).
+- **Acceptance:** 100 % green matrix, no warnings with `-Wall -Wextra`,
+  valgrind/ASan clean when decoding the corpus.
 
 ---
 
-## 4. Dónde va el asm (y por qué)
+## 4. Where the assembly goes (and why)
 
-| Rutina | Motivo | Implementación |
+| Routine | Why | Implementation |
 |---|---|---|
-| `Decoder::decode` / `Encoder::encode` (byte-level) | ~1 op por byte comprimido, dominio del tiempo | asm inline en `coder.c` + fallback C |
-| Update de ICM/ISSE/MIX/SSE/CM (`p[i] += ...`, `dt[]` lookups) | ~8 modelos por bit | asm de bloque `asm/model_x86_64.S` |
-| `ZPAQL` HCOMP/PCOMP | se ejecuta por byte de entrada | JIT que emite código (equivalente a `ZPAQL::assemble`) |
-| `memcpy`/`memset` de buffers de 64B alineados, `bswap`, `popcnt/lzcnt` | accesos calientes | asm con detección de CPU (`cpuid`) |
-| Opcional: SHA-1 con SHA-NI | dedup de fragmentos | asm condicional |
+| `Decoder::decode` / `Encoder::encode` (byte-level) | ~1 op per compressed byte, time-dominant | inline asm in `coder.c` + C fallback |
+| ICM/ISSE/MIX/SSE/CM updates (`p[i] += ...`, `dt[]` lookups) | ~8 models per bit | block asm `asm/model_x86_64.S` |
+| `ZPAQL` HCOMP/PCOMP | runs once per input byte | JIT that emits code (equivalent to `ZPAQL::assemble`) |
+| 64-byte aligned `memcpy`/`memset`, `bswap`, `popcnt/lzcnt` | hot accesses | asm with CPU detection (`cpuid`) |
+| Optional: SHA-1 with SHA-NI | fragment dedup | conditional asm |
 
-Regla: **el asm nunca cambia semántica**. Cada kernel tiene test diferencial contra la
-versión C pura (misma función, compilada sin asm), y el JIT contra el intérprete.
-`make NOJIT=1` debe producir el mismo output (sólo más lento).
-
----
-
-## 5. Riesgos y mitigaciones
-
-- **R1 — UB del C++ original.** Upstream hace shifts con signo, `char` con signo,
-  aliasing y aritmética de 32 bits con wrap. El port debe fijar esos comportamientos
-  explícitamente (`uint32_t`, `U8`, shifts enmascarados). Mitigación: tests
-  diferenciales por byte y `-fwrapv`-equivalente documentado en C.
-- **R2 — JIT.** El JIT es una optimización, no semántica; se puede shippear primero el
-  intérprete. Pero upstream lo usa por default y el bit-exacto no depende de él.
-  Mitigación: diferencial JIT vs intérprete en E2 antes de habilitarlo.
-- **R3 — Multihilo.** El orden de escritura de bloques en `-t>1` afecta los bytes.
-  Mitigación: portar la política de `CompressJob`/`writeThread`/`Semaphore` tal cual;
-  verificar `-t1` primero y luego `-t2/-t4/-t8` con el mismo input.
-- **R4 — Memoria.** Los niveles altos usan cientos de MB por hilo (upstream reserva y
-  toca páginas). Mitigación: misma estrategia de reserva/zeroing, tests con `ulimit`.
-- **R5 — Formatos de fecha/atributo.** Windows vs unix (`decimal_time`, atributos
-  MSDOS). Mitigación: fijar `-Dunix` como upstream en Linux; la tabla se porta tal cual.
-- **R6 — Corpus grande.** `archive` del corpus pesa 59 GB. Mitigación: copiar muestras
-  chicas filtradas por tamaño a `/mnt/IA_LAB/agentes/zpaqII/corpus`.
-- **R7 — Alcance.** 11 k líneas C++ no se portan de una sentada sin errores.
-  Mitigación: etapas con aceptación binaria, y el oráculo como red de seguridad en
-  cada commit.
+Rule: **assembly never changes semantics**. Every kernel has a differential test
+against the pure C version (same function built without asm), and the JIT against
+the interpreter. `make NOJIT=1` must produce the same output (only slower).
 
 ---
 
-## 6. Convenciones del repo
+## 5. Risks and mitigations
 
-- `core/` sólo C11 + asm; sin dependencias externas; sin I/O de archivos.
-- `host/` sólo Pascal; sin lógica de compresión.
-- Nombres: `zq_*` para el core, `T*` para clases Pascal.
-- Un commit por módulo con su test; nunca dejar el árbol sin compilar.
-- Licencia: Unlicense (igual que upstream); `divsufsort` mantiene su MIT.
+- **R1 — UB in the original C++.** Upstream does signed shifts, signed `char`,
+  aliasing and 32-bit wrapping arithmetic. The port must pin these behaviors
+  explicitly (`uint32_t`, `U8`, masked shifts). Mitigation: per-byte differential
+  tests and documented wrap helpers in C.
+- **R2 — JIT.** The JIT is an optimization, not semantics; the interpreter can
+  ship first. Upstream uses it by default, but bit-exactness does not depend on
+  it. Mitigation: JIT vs interpreter differential in E2 before enabling it.
+- **R3 — Multithreading.** Block write ordering with `-t>1` affects the bytes.
+  Mitigation: port `CompressJob`/`writeThread`/`Semaphore` policy as-is; verify
+  `-t1` first, then `-t2/-t4/-t8` with the same input.
+- **R4 — Memory.** High levels use hundreds of MB per thread (upstream reserves
+  and touches pages). Mitigation: same reserve/zeroing strategy, tests under
+  `ulimit`.
+- **R5 — Date/attribute formats.** Windows vs unix (`decimal_time`, MSDOS
+  attributes). Mitigation: fix `-Dunix` like upstream on Linux; port the table as-is.
+- **R6 — Corpus size.** The `archive` corpus is 59 GB. Mitigation: copy small
+  samples filtered by size into `/mnt/IA_LAB/agentes/zpaqII/corpus`.
+- **R7 — Scope.** 11k lines of C++ cannot be ported in one sitting without
+  errors. Mitigation: stages with binary acceptance criteria, and the oracle as
+  a safety net on every commit.
+
+---
+
+## 6. Repository conventions
+
+- `core/`: C11 + asm only; no external dependencies; no file I/O.
+- `host/`: Pascal only; no compression logic.
+- Naming: `zq_*` for the core, `T*` for Pascal classes.
+- One commit per module with its test; never leave the tree unbuildable.
+- English only in code, comments, docs and commit messages.
+- License: Unlicense (same as upstream); `divsufsort` keeps its MIT license.

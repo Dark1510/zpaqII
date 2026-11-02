@@ -1,7 +1,7 @@
-/* Verificación E2: lee el manifiesto generado por el oráculo (configs ZPAQL +
- * args), compila con el core C, ejecuta la VM y emite los mismos resultados.
+/* E2 check: reads the manifest produced by the oracle (ZPAQL configs +
+ * args), compiles with the C core, runs the VM and emits the same results.
  *
- * Uso: zpaql_dump <manifest> <resultados>
+ * Usage: zpaql_dump <manifest> <results>
  */
 #include "zq_internal.h"
 
@@ -41,7 +41,7 @@ static unsigned nextrand(void) {
   return lcg >> 8;
 }
 
-/* Deshace el escape del manifiesto: \\ -> \ y \n -> salto de linea. */
+/* Undoes the manifest escaping: \\ -> \ and \n -> newline. */
 static void unescape(const char *in, char *out) {
   while (*in) {
     if (*in == '\\' && in[1] == 'n') {
@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
   mf = fopen(argv[1], "r");
   rf = fopen(argv[2], "w");
   if (!mf || !rf) {
-    fprintf(stderr, "no puedo abrir archivos\n");
+    fprintf(stderr, "cannot open files\n");
     return 2;
   }
   cfgcap = 70000;
@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
       const char *p = line + 4;
       int i;
       for (i = 0; i < 9; ++i) args[i] = (int)strtol(p, (char **)&p, 10);
-      /* caso completo: compilar y ejecutar */
+      /* full case: compile and run */
       {
         zq_zpaql hz, pz;
         zq_buf *bch = zq_buf_new(0), *bcp = zq_buf_new(0),

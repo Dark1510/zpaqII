@@ -1,6 +1,6 @@
-/* zpaqII — AES-256-CTR, scrypt/stretchKey y random.
- * Port de libzpaq 7.15 (Unlicense, Matt Mahoney).  El AES deriva de
- * libtomcrypt 1.17 (dominio publico); scrypt/Salsa20/8 de cr.yp.to. */
+/* zpaqII - AES-256-CTR, scrypt/stretchKey and random.
+ * Port of libzpaq 7.15 (Unlicense, Matt Mahoney).  AES derives from
+ * libtomcrypt 1.17 (public domain); scrypt/Salsa20/8 from cr.yp.to. */
 #include "zq.h"
 
 #include <stdio.h>
@@ -19,7 +19,7 @@ void zq_aes_init(zq_aes_ctr *a, const char *key, int keylen, const char *iv) {
                                   0x40000000u, 0x80000000u, 0x1B000000u,
                                   0x36000000u};
 
-  /* IV (por defecto 0) */
+  /* IV (default 0) */
   a->iv0 = a->iv1 = 0;
   if (iv) {
     const unsigned char *u = (const unsigned char *)iv;
@@ -29,7 +29,7 @@ void zq_aes_init(zq_aes_ctr *a, const char *key, int keylen, const char *iv) {
              ((zq_u32)u[6] << 8) | (zq_u32)u[7];
   }
 
-  /* tablas de cifrado */
+  /* encryption tables */
   for (i = 0; i < 256; ++i) {
     const unsigned s1 =
         "\x63\x7c\x77\x7b\xf2\x6b\x6f\xc5\x30\x01\x67\x2b\xfe\xd7\xab\x76"
@@ -61,7 +61,7 @@ void zq_aes_init(zq_aes_ctr *a, const char *key, int keylen, const char *iv) {
   }
 
   /* key schedule */
-  a->Nr = 10 + ((keylen / 8) - 2) * 2; /* 10, 12 o 14 rondas */
+  a->Nr = 10 + ((keylen / 8) - 2) * 2; /* 10, 12 or 14 rounds */
   {
     int idx = 0;
     zq_u32 *rk = &a->ek[0];
@@ -197,7 +197,7 @@ void zq_aes_encrypt_block(zq_aes_ctr *a, zq_u32 s0, zq_u32 s1, zq_u32 s2,
   ct[15] = (unsigned char)(s3);
 }
 
-/* XOR buf[0..n-1] en el offset dado con AES(i) (i big-endian por bloque). */
+/* XOR buf[0..n-1] at the given offset with AES(i) (i big-endian per block). */
 void zq_aes_encrypt(zq_aes_ctr *a, char *buf, int n, zq_u64 offset) {
   zq_u64 i;
   for (i = offset / 16; i <= (offset + (zq_u64)n) / 16; ++i) {
@@ -212,7 +212,7 @@ void zq_aes_encrypt(zq_aes_ctr *a, char *buf, int n, zq_u64 offset) {
 }
 
 /* ------------------------------------------------------------------ */
-/* scrypt (PBKDF2-SHA256 con c=1 + SMix)                               */
+/* scrypt (PBKDF2-SHA256 with c=1 + SMix)                              */
 /* ------------------------------------------------------------------ */
 
 static void pbkdf2(const char *pw, int pwLen, const char *salt, int saltLen,
@@ -235,7 +235,7 @@ static void pbkdf2(const char *pw, int pwLen, const char *salt, int saltLen,
   }
 }
 
-/* Salsa20/8 sobre b[0..15] (32 bits). */
+/* Salsa20/8 over b[0..15] (32-bit words). */
 static void salsa8(zq_u32 *b) {
   unsigned x[16];
   int i;
@@ -280,7 +280,7 @@ static void salsa8(zq_u32 *b) {
   for (i = 0; i < 16; ++i) b[i] += x[i];
 }
 
-/* BlockMix_{Salsa20/8, r} sobre b[0..128*r-1]. */
+/* BlockMix_{Salsa20/8, r} over b[0..128*r-1]. */
 static void blockmix(zq_u32 *b, int r) {
   zq_u32 x[16];
   zq_u32 y[256];
@@ -295,7 +295,7 @@ static void blockmix(zq_u32 *b, int r) {
   for (i = 0; i < r; ++i) memcpy(b + (i + r) * 16, &y[i * 32 + 16], 64);
 }
 
-/* SMix sobre b[0..128*r-1]. */
+/* SMix over b[0..128*r-1]. */
 static void smix(char *b, int r, int n) {
   zq_arr xarr = {0}, varr = {0};
   zq_u32 *x;
