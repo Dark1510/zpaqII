@@ -587,6 +587,27 @@ addsel "-not" d1 d2 -not d2
 addsel "-to rename" d1 -to out
 addsel "-to several" d1/a.txt d2/c.txt -to x.a y.c
 
+# add: an unreadable input file is reported and skipped (exit code 1)
+rm -rf uu up
+mkdir uu up
+printf 'ok\n' > uu/f.txt
+printf 'no\n' > uu/noread.txt
+touch -d @$NOW uu/f.txt uu/noread.txt
+cp -p uu/f.txt uu/noread.txt up/
+chmod 000 uu/noread.txt up/noread.txt
+(cd uu && FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add a.zpaq f.txt noread.txt -m1 -t1 >log 2>err)
+ru=$?
+(cd up && ZPAQII_NOW=$NOW "$P" add a.zpaq f.txt noread.txt -m1 -t1 >log 2>err)
+rp=$?
+chmod 644 uu/noread.txt up/noread.txt
+if [ "$ru" = "$rp" ] && cmp -s uu/a.zpaq up/a.zpaq &&
+   diff <(norm2 <uu/log) <(norm2 <up/log) >/dev/null 2>&1 &&
+   diff <(norm2 <uu/err) <(norm2 <up/err) >/dev/null 2>&1; then
+  ok
+else
+  bad "add unreadable file (rc $ru/$rp)"
+fi
+
 # ---- streaming add and extract output ----
 rm -rf stu stp
 mkdir stu stp

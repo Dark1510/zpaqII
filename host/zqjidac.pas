@@ -1849,6 +1849,22 @@ begin
   Result := 0;
 end;
 
+{ Open an input file like upstream's fopen(RB): on failure print
+  "<path>: <error>" (printerr) and return nil. }
+function OpenIn(const path: string): TStream;
+var
+  h: THandle;
+begin
+  Result := nil;
+  h := fpOpen(PChar(path), O_RDONLY, 0);
+  if h < 0 then
+  begin
+    WriteLn(StdErr, path, ': ', SysErrorMessage(fpGetErrno));
+    Exit;
+  end;
+  Result := THandleStream.Create(h);
+end;
+
 { Open an output file like upstream's fopen: on failure print "<path>: <error>"
   (printerr) and return nil.  create=True truncates, otherwise it must exist. }
 function OpenOut(const path: string; create: Boolean): TStream;
@@ -2787,7 +2803,7 @@ var
   sb, isb: TZqBuf;
   fragbuf: PAnsiChar;
   total_size, total_done, fsize, dedupesize, esize, newsize: Int64;
-  dst: TFileStream;
+  dst: TStream;
   buf: array[0..4095] of Byte;
   bufptr, buflen: Integer;
   c, c1: Integer;
@@ -3131,7 +3147,15 @@ begin
       if fi < vf.Count then
       begin
         e := TEdtEntry(vf.Objects[fi]);
-        dst := TFileStream.Create(vf[fi], fmOpenRead or fmShareDenyNone);
+        dst := OpenIn(vf[fi]);
+        if dst = nil then
+        begin
+          { upstream: skip the file, count the error and shrink the total }
+          e.date := 0;
+          Inc(errors);
+          Dec(total_size, e.size);
+          Continue;
+        end;
       end;
       fsize := 0;
       fj := 0;

@@ -676,3 +676,18 @@ timing and ETA) for: `add` (new, update with `#`/`-`, `-summary`, `-to`,
 `-only`, `-not`), `extract` (plain, second run with `?`, `-force` with `=`,
 `-test`, `-only`, `-summary`), streaming add/extract, and `list -s2` with
 duplicates: 92 checks.
+
+## E22e: per-file I/O errors in add and extract
+
+Both commands now report I/O failures per file and keep going, like upstream:
+
+* `add`: a file that cannot be opened is reported (`<path>: <strerror>`), its
+  date is cleared so no index record is written, the error counter goes up and
+  the run ends with exit code 1 (`with warnings`).  Before, the port aborted
+  with an FPC exception and exit code 2.
+* `extract`: a file that cannot be created is reported, skipped, and counted in
+  the final `Extracted X of Y files OK (N errors) using M MB x T threads`
+  (the memory figure comes from `zq_d_find_block`).
+
+`tests/cli.sh` exercises both with an unreadable file and a read-only directory
+(97 checks).
