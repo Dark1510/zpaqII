@@ -75,7 +75,7 @@ $(BUILD)/e1_upstream.txt: $(BUILD)/e1_oracle
 
 $(BUILD)/e1_oracle: tools/oracle/e1_dump.cpp
 	@mkdir -p $(BUILD)
-	$(CXX) -O2 -Dunix -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
+	$(CXX) -O2 -Dunix -DNOJIT -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
 
 # Hardware SHA-1 (x86 SHA extensions) against the portable one.  On a CPU
 # without SHA-NI this only reports that there is nothing to compare; run it
@@ -147,7 +147,7 @@ $(BUILD)/zpaql_dump: tests/unit/zpaql_dump.c $(BUILD)/libzqcore.a
 
 $(BUILD)/e2_oracle: tools/oracle/e2_dump.cpp
 	@mkdir -p $(BUILD)
-	$(CXX) -O2 -Dunix -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
+	$(CXX) -O2 -Dunix -DNOJIT -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
 
 test-e3: $(BUILD)/predictor_dump $(BUILD)/e3_oracle
 	@$(BUILD)/e3_oracle $(BUILD)/e3_manifest.txt $(BUILD)/e3_upstream.txt
@@ -190,7 +190,7 @@ $(BUILD)/cblock: tests/unit/cblock.c $(BUILD)/libzqcore.a
 
 $(BUILD)/e4_oracle: tools/oracle/e4_dump.cpp
 	@mkdir -p $(BUILD)
-	$(CXX) -O2 -Dunix -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
+	$(CXX) -O2 -Dunix -DNOJIT -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
 
 test-e4b: $(BUILD)/cblock $(BUILD)/e4_oracle
 	@tests/e4b.sh $(BUILD)

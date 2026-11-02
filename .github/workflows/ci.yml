@@ -42,7 +42,7 @@ jobs:
       - name: bit-exact matrix
         run: make matrix UPSTREAM=$PWD/build/upstream
 
-  # Everything we can cross-build from one x86-64 Linux box.
+  # Cross-target core: arm64 (qemu) and both mingw builds.
   cross:
     runs-on: ubuntu-latest
     steps:
@@ -52,7 +52,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential g++ git make fpc python3 \
-            gcc-multilib gcc-aarch64-linux-gnu qemu-user \
+            gcc-aarch64-linux-gnu qemu-user \
             gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 fp-units-win-base
       - name: oracle (upstream 7.15, for the reference output)
         run: make oracle UPSTREAM=$PWD/build/upstream
@@ -68,6 +68,22 @@ jobs:
           path: |
             build/win64/zpaqii.exe
             build/win64/zqcore.dll
+
+  # 32-bit Linux needs the multilib gcc, which conflicts with the cross
+  # toolchains above, so it gets its own job.
+  cross-i386:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential g++ git make python3 gcc-multilib
+      - name: oracle (upstream 7.15, for the reference output)
+        run: make oracle UPSTREAM=$PWD/build/upstream
+      - name: 32-bit core
+        run: make cross UPSTREAM=$PWD/build/upstream
 
   # Run the Windows build under wine: a regression gate, not a substitute for
   # the real-Windows check we do before releases.
