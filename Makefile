@@ -52,12 +52,13 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h
 
 # ---------------- tests ----------------
 
-test: test-e1 test-e2 test-e3 test-e4 test-e4b
+test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5
 	@echo "== E1 (hash/AES/scrypt): OK =="
 	@echo "== E2 (ZPAQL VM + compiler): OK =="
 	@echo "== E3 (predictor + coder): OK =="
 	@echo "== E4 (container + extraction): OK =="
 	@echo "== E4b (bit-exact block compression): OK =="
+	@echo "== E5a (Pascal host, streaming archives): OK =="
 
 test-e1: $(BUILD)/vectors_e1 $(BUILD)/e1_oracle
 	@$(BUILD)/vectors_e1 > $(BUILD)/e1_core.txt
@@ -130,3 +131,16 @@ $(BUILD)/e4_oracle: tools/oracle/e4_dump.cpp
 
 test-e4b: $(BUILD)/cblock $(BUILD)/e4_oracle
 	@tests/e4b.sh $(BUILD)
+
+# E5: Pascal host
+HOST_SRC := $(wildcard host/*.pas) host/zpaqii.lpr
+
+$(BUILD)/zpaqii: $(HOST_SRC) $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)/host
+	$(FPC) -Mobjfpc -O2 -FU$(CURDIR)/$(BUILD)/host -Fu$(CURDIR)/host \
+	  -Fl$(CURDIR)/$(BUILD) -k-lzqcore -k-lc host/zpaqii.lpr -o$@
+
+host: $(BUILD)/zpaqii
+
+test-e5: $(BUILD)/zpaqii
+	@tests/e5.sh $(BUILD)

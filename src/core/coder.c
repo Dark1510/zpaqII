@@ -40,9 +40,12 @@ int zq_dec_buffered(const zq_decoder *d) { return (int)(d->wpos - d->rpos); }
 int zq_dec_get(zq_decoder *d) {
   if (d->rpos == d->wpos) {
     d->rpos = 0;
-    d->wpos = d->in
-                  ? (zq_u32)zq_reader_read(d->in, (char *)d->buf, (int)d->bufn)
-                  : 0;
+    if (!d->in)
+      d->wpos = 0;
+    else if (d->in->read)
+      d->wpos = (zq_u32)d->in->read(d->in->self, (char *)d->buf, (int)d->bufn);
+    else
+      d->wpos = (zq_u32)zq_reader_read(d->in, (char *)d->buf, (int)d->bufn);
   }
   return d->rpos < d->wpos ? (int)d->buf[d->rpos++] : -1;
 }

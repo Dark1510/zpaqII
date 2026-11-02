@@ -81,7 +81,13 @@ int main(int argc, char **argv) {
   zq_sha1_init(&sha);
   zq_d_set_sha1(d, &sha);
 
-  while (zq_d_find_block(d, NULL)) {
+  for (;;) {
+    int rb = zq_d_find_block(d, NULL);
+    if (rb < 0) {
+      fprintf(stderr, "error: %s\n", zq_last_error());
+      break;
+    }
+    if (rb == 0) break;
     ++blocks;
     for (;;) {
       namebuf nb;
@@ -89,11 +95,21 @@ int main(int argc, char **argv) {
       long long before = dst.total;
       nb.s[0] = 0;
       nb.n = 0;
-      if (!zq_d_find_filename(d, &(zq_writer){name_put, NULL, &nb})) break;
-      zq_d_read_comment(d, NULL);
+      {
+        int r = zq_d_find_filename(d, &(zq_writer){name_put, NULL, &nb});
+        if (r < 0) {
+          fprintf(stderr, "error: %s\n", zq_last_error());
+          break;
+        }
+        if (r == 0) break;
+      }
       zq_sha1_init(&sha);
-      zq_d_decompress(d, -1);
-      zq_d_read_segment_end(d, sha1str);
+      if (zq_d_read_comment(d, NULL) < 0 ||
+          zq_d_decompress(d, -1) < 0 ||
+          zq_d_read_segment_end(d, sha1str) < 0) {
+        fprintf(stderr, "error: %s\n", zq_last_error());
+        break;
+      }
       ++segs;
       if (sha1str[0] == 1) {
         char h[20];

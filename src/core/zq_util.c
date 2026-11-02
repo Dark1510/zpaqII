@@ -111,3 +111,23 @@ void zq_writer_write(zq_writer *w, const char *buf, int n) {
   if (!w || !w->put) return;
   for (i = 0; i < n; ++i) w->put(w->self, (zq_u8)buf[i]);
 }
+
+/* ------------------------------------------------------------------ */
+/* Heap wrappers used by the Pascal host                               */
+/* ------------------------------------------------------------------ */
+
+zq_sha1 *zq_sha1_new(void) {
+  zq_sha1 *s = (zq_sha1 *)zq_calloc(sizeof(zq_sha1));
+  zq_sha1_init(s);
+  return s;
+}
+
+void zq_sha1_free(zq_sha1 *s) { free(s); }
+
+zq_aes_ctr *zq_aes_new(const char *key, int keylen, const char *iv) {
+  zq_aes_ctr *a = (zq_aes_ctr *)zq_calloc(sizeof(zq_aes_ctr));
+  zq_aes_init(a, key, keylen, iv);
+  return a;
+}
+
+void zq_aes_free(zq_aes_ctr *a) { free(a); }

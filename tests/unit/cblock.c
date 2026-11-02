@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
   zq_writer w;
   zq_buf *b;
   zq_err_frame ef;
-  int rc = 0;
+  volatile int rc = 0;
 
   if (argc < 4) {
     fprintf(stderr, "usage: cblock <in> <out> <method>\n");
@@ -54,7 +54,10 @@ int main(int argc, char **argv) {
     rc = 1;
   } else {
     zq_err_push(&ef);
-    zq_compress_block(b, &w, argv[3], "data.bin", NULL, 1);
+    if (zq_compress_block(b, &w, argv[3], "data.bin", NULL, 1) < 0) {
+      fprintf(stderr, "error: %s\n", zq_last_error());
+      rc = 1;
+    }
     zq_err_pop(&ef);
   }
   fclose(out);

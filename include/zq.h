@@ -205,25 +205,32 @@ void zq_d_set_output(zq_decompresser *d, zq_writer *out);
 void zq_d_set_sha1(zq_decompresser *d, zq_sha1 *sha1);
 int  zq_d_buffered(const zq_decompresser *d);
 
-/* 1 = block header found, 0 = end of input */
+/* 1 = block header found, 0 = end of input, -1 = error */
 int  zq_d_find_block(zq_decompresser *d, double *memptr);
-/* 1 = segment found (filename written if not NULL), 0 = end of block */
+/* 1 = segment found (filename written if not NULL), 0 = end of block, -1 = error */
 int  zq_d_find_filename(zq_decompresser *d, zq_writer *filename);
-void zq_d_read_comment(zq_decompresser *d, zq_writer *comment);
+int  zq_d_read_comment(zq_decompresser *d, zq_writer *comment);
 /* n bytes, or the whole segment when n < 0.  Returns 0 at segment end. */
 int  zq_d_decompress(zq_decompresser *d, int n);
 /* sha1string21: [0] = 0 (no checksum) or 1, then the 20-byte SHA-1. */
-void zq_d_read_segment_end(zq_decompresser *d, char *sha1string21);
+int  zq_d_read_segment_end(zq_decompresser *d, char *sha1string21);
 void zq_d_hcomp(zq_decompresser *d, zq_writer *out);
 int  zq_d_pcomp(zq_decompresser *d, zq_writer *out);
 
-/* Compress one block (single segment) with a zpaq method string. */
-void zq_compress_block(zq_buf *in, zq_writer *out, const char *method,
-                       const char *filename, const char *comment, int dosha1);
+/* Heap wrappers so the host never needs the struct layout. */
+zq_sha1   *zq_sha1_new(void);
+void       zq_sha1_free(zq_sha1 *s);
+zq_aes_ctr *zq_aes_new(const char *key, int keylen, const char *iv);
+void       zq_aes_free(zq_aes_ctr *a);
 
-/* Single-segment block, whole input buffer (libzpaq::compress). */
-void zq_compress(zq_reader *in, zq_writer *out, const char *method,
-                 const char *filename, const char *comment, int dosha1);
+/* Compress one block (single segment) with a zpaq method string.
+ * Returns 0 on success, -1 on error (see zq_last_error()). */
+int zq_compress_block(zq_buf *in, zq_writer *out, const char *method,
+                      const char *filename, const char *comment, int dosha1);
+
+/* Multi-block compression (libzpaq::compress).  Returns 0 or -1. */
+int zq_compress(zq_reader *in, zq_writer *out, const char *method,
+                const char *filename, const char *comment, int dosha1);
 
 #ifdef __cplusplus
 }

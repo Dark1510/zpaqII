@@ -50,8 +50,8 @@ static int zq_lz_read_cb(void *self, char *p, int n) {
 /* compressBlock                                                       */
 /* ------------------------------------------------------------------ */
 
-void zq_compress_block(zq_buf *in, zq_writer *out, const char *method_,
-                       const char *filename, const char *comment, int dosha1) {
+static int zq_compress_block_impl(zq_buf *in, zq_writer *out, const char *method_,
+                                 const char *filename, const char *comment, int dosha1) {
   const unsigned n = (unsigned)zq_buf_size(in);
   const int arg0 = ZQ_MAX(zq_lg(n + 4095) - 20, 0);
   zq_sb method;
@@ -223,14 +223,15 @@ void zq_compress_block(zq_buf *in, zq_writer *out, const char *method_,
   free(config);
   free(method.s);
   zq_buf_free(pcmd);
+  return 0;
 }
 
 /* ------------------------------------------------------------------ */
 /* compress(): multiple blocks                                         */
 /* ------------------------------------------------------------------ */
 
-void zq_compress(zq_reader *in, zq_writer *out, const char *method,
-                 const char *filename, const char *comment, int dosha1) {
+static int zq_compress_impl(zq_reader *in, zq_writer *out, const char *method,
+                           const char *filename, const char *comment, int dosha1) {
   int bs = 4;
   zq_buf *sb;
   char *scratch;
@@ -250,10 +251,34 @@ void zq_compress(zq_reader *in, zq_writer *out, const char *method,
     int nr = zq_reader_read(in, scratch, bs);
     if (nr <= 0) break;
     zq_buf_resize(sb, (size_t)nr);
-    zq_compress_block(sb, out, method, filename, comment, dosha1);
+    if (zq_compress_block_impl(sb, out, method, filename, comment, dosha1) < 0)
+      return -1;
     filename = NULL;
     comment = NULL;
     zq_buf_resize(sb, 0);
   }
   zq_buf_free(sb);
+  return 0;
+}
+
+int zq_compress_block(zq_buf *in, zq_writer *out, const char *method,
+                      const char *filename, const char *comment, int dosha1) {
+  zq_err_frame ef;
+  int rc;
+  if (setjmp(ef.jb)) return -1;
+  zq_err_push(&ef);
+  rc = zq_compress_block_impl(in, out, method, filename, comment, dosha1);
+  zq_err_pop(&ef);
+  return rc;
+}
+
+int zq_compress(zq_reader *in, zq_writer *out, const char *method,
+                const char *filename, const char *comment, int dosha1) {
+  zq_err_frame ef;
+  int rc;
+  if (setjmp(ef.jb)) return -1;
+  zq_err_push(&ef);
+  rc = zq_compress_impl(in, out, method, filename, comment, dosha1);
+  zq_err_pop(&ef);
+  return rc;
 }

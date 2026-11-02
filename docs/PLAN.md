@@ -159,6 +159,12 @@ let the oracle (upstream) validate each piece as early as possible.
   (pool + semaphores with the same ordering policy as upstream).
 - **Acceptance:** full E6 matrix over commands and options, including `-key`,
   multi-part, `-until`, `-fragment`, `-index`, and error/exit-code behavior.
+- **Status:** streaming mode (`-method s...`) done: `zqcore.pas` (C bindings),
+  `zqfile.pas` (dates, attributes, paths), `zqarchive.pas` (multi-part + AES-CTR
+  reader/writer) and `zpaqii.lpr` (`add`/`extract`/`list`). 23 streaming archives
+  (single/multi file, multi-block, empty, E8E9, BWT, all model types) are
+  **bit-identical** to upstream and extract in both directions. JIDAC
+  (journaling, dedup, versions, `-until`, index) pending.
 
 ### E6 — Full verification and performance
 - `tests/matrix.sh`: cross matrix, both directions × levels × methods × options.

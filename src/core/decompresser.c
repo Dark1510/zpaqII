@@ -52,7 +52,7 @@ int zq_d_pcomp(zq_decompresser *d, zq_writer *out) {
   return zq_zpaql_write(&d->pp.z, out, 1);
 }
 
-int zq_d_find_block(zq_decompresser *d, double *memptr) {
+static int zq_d_find_block_impl(zq_decompresser *d, double *memptr) {
   zq_u32 h1 = 0x3D49B113u, h2 = 0x29EB7F93u, h3 = 0x2614BE13u,
          h4 = 0x3828EB13u;
   int c;
@@ -88,7 +88,7 @@ int zq_d_find_block(zq_decompresser *d, double *memptr) {
 
 /* Read the start of a segment (1) or the end of block code (255).
  * Returns 1 if a segment was found (writing its filename), else 0. */
-int zq_d_find_filename(zq_decompresser *d, zq_writer *filename) {
+static int zq_d_find_filename_impl(zq_decompresser *d, zq_writer *filename) {
   int c = zq_dec_get(&d->dec);
   if (c == 1) {
     for (;;) {
@@ -109,7 +109,7 @@ int zq_d_find_filename(zq_decompresser *d, zq_writer *filename) {
   return 0;
 }
 
-void zq_d_read_comment(zq_decompresser *d, zq_writer *comment) {
+static int zq_d_read_comment_impl(zq_decompresser *d, zq_writer *comment) {
   d->state = ZQ_DATA;
   for (;;) {
     int c = zq_dec_get(&d->dec);
@@ -118,10 +118,11 @@ void zq_d_read_comment(zq_decompresser *d, zq_writer *comment) {
     if (comment) comment->put(comment->self, c);
   }
   if (zq_dec_get(&d->dec) != 0) zq_error("missing reserved byte");
+  return 1;
 }
 
 /* Decompress n bytes, or all when n < 0.  Returns 0 when the segment ends. */
-int zq_d_decompress(zq_decompresser *d, int n) {
+static int zq_d_decompress_impl(zq_decompresser *d, int n) {
   if (d->decode_state == ZQ_SKIP) zq_error("decompression after skipped segment");
   if (d->state != ZQ_DATA) zq_error("decompress in wrong state");
 
@@ -149,7 +150,7 @@ int zq_d_decompress(zq_decompresser *d, int n) {
 
 /* Read the end of a segment.  sha1string[0] is 0 (no checksum) or 1 followed
  * by the 20 checksum bytes.  May be NULL to discard. */
-void zq_d_read_segment_end(zq_decompresser *d, char *sha1string) {
+static int zq_d_read_segment_end_impl(zq_decompresser *d, char *sha1string) {
   int c = 0, i;
   if (d->state == ZQ_DATA) {
     c = zq_dec_skip(&d->dec);
@@ -172,4 +173,59 @@ void zq_d_read_segment_end(zq_decompresser *d, char *sha1string) {
   } else {
     zq_error("missing end of segment marker");
   }
+  return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Public entry points: errors are caught here and reported as -1      */
+/* ------------------------------------------------------------------ */
+
+int zq_d_find_block(zq_decompresser *d, double *memptr) {
+  zq_err_frame ef;
+  int rc;
+  if (setjmp(ef.jb)) return -1;
+  zq_err_push(&ef);
+  rc = zq_d_find_block_impl(d, memptr);
+  zq_err_pop(&ef);
+  return rc;
+}
+
+int zq_d_find_filename(zq_decompresser *d, zq_writer *filename) {
+  zq_err_frame ef;
+  int rc;
+  if (setjmp(ef.jb)) return -1;
+  zq_err_push(&ef);
+  rc = zq_d_find_filename_impl(d, filename);
+  zq_err_pop(&ef);
+  return rc;
+}
+
+int zq_d_read_comment(zq_decompresser *d, zq_writer *comment) {
+  zq_err_frame ef;
+  int rc;
+  if (setjmp(ef.jb)) return -1;
+  zq_err_push(&ef);
+  rc = zq_d_read_comment_impl(d, comment);
+  zq_err_pop(&ef);
+  return rc;
+}
+
+int zq_d_decompress(zq_decompresser *d, int n) {
+  zq_err_frame ef;
+  int rc;
+  if (setjmp(ef.jb)) return -1;
+  zq_err_push(&ef);
+  rc = zq_d_decompress_impl(d, n);
+  zq_err_pop(&ef);
+  return rc;
+}
+
+int zq_d_read_segment_end(zq_decompresser *d, char *sha1string) {
+  zq_err_frame ef;
+  int rc;
+  if (setjmp(ef.jb)) return -1;
+  zq_err_push(&ef);
+  rc = zq_d_read_segment_end_impl(d, sha1string);
+  zq_err_pop(&ef);
+  return rc;
 }
