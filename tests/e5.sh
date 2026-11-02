@@ -69,3 +69,48 @@ run exe s4.7 corpus/exe.bin
 
 if [ $fail -ne 0 ]; then echo "E5: FAILURES"; exit 1; fi
 echo "E5: $n streaming archives bit-identical and cross-extractable"
+
+# ---- journaling archives: read, list and extract (add is not implemented) ----
+JFAIL=0
+jrun() { # name method file
+  local name=$1 m=$2 f=$3
+  rm -rf "$name".zpaq "$name".out "$name".up
+  mkdir -p "$name".out "$name".up
+  if ! "$Z" add "$name".zpaq "$f" -m"$m" -t1 >/dev/null 2>&1; then
+    echo "SKIP $name (upstream add)"; return
+  fi
+  if ! "$P" extract "$name".zpaq -to "$name".out >/dev/null 2>&1; then
+    echo "FAIL $name (m$m): our extract"; JFAIL=1; return
+  fi
+  if ! cmp -s "$f" "$name".out/"$f"; then
+    echo "FAIL $name (m$m): data differs"; JFAIL=1; return
+  fi
+  if ! "$Z" extract "$name".zpaq -to "$name".up -t1 >/dev/null 2>&1; then
+    echo "FAIL $name (m$m): upstream extract"; JFAIL=1; return
+  fi
+  if ! diff -r "$name".out "$name".up >/dev/null 2>&1; then
+    echo "FAIL $name (m$m): differs from upstream extract"; JFAIL=1; return
+  fi
+  echo "ok   $name (journaling m$m)"
+}
+for m in 0 1 2 3 4 5; do
+  jrun "j-text-m$m" "$m" corpus/text.txt
+  jrun "j-bin-m$m" "$m" corpus/bin.dat
+done
+jrun j-two 1 corpus/text.txt
+
+# multi-version with -until
+rm -rf multi.zpaq multi.out1 multi.out2
+printf 'one\n' > v1.txt
+"$Z" add multi.zpaq v1.txt -m1 -t1 >/dev/null 2>&1
+printf 'two, longer\n' > v1.txt
+sleep 1
+"$Z" add multi.zpaq v1.txt -m1 -t1 >/dev/null 2>&1
+mkdir -p multi.out1 multi.out2
+if "$P" extract multi.zpaq -to multi.out2 >/dev/null 2>&1 && \
+   cmp -s v1.txt multi.out2/v1.txt; then echo "ok   latest version"; else echo "FAIL latest version"; JFAIL=1; fi
+if "$P" extract multi.zpaq -to multi.out1 -until 1 >/dev/null 2>&1 && \
+   [ "$(cat multi.out1/v1.txt)" = "one" ]; then echo "ok   -until 1"; else echo "FAIL -until 1"; JFAIL=1; fi
+
+if [ $JFAIL -ne 0 ]; then echo "E5b: FAILURES"; exit 1; fi
+echo "E5b: journaling archives listed and extracted identically"

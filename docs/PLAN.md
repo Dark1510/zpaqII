@@ -163,8 +163,16 @@ let the oracle (upstream) validate each piece as early as possible.
   `zqfile.pas` (dates, attributes, paths), `zqarchive.pas` (multi-part + AES-CTR
   reader/writer) and `zpaqii.lpr` (`add`/`extract`/`list`). 23 streaming archives
   (single/multi file, multi-block, empty, E8E9, BWT, all model types) are
-  **bit-identical** to upstream and extract in both directions. JIDAC
-  (journaling, dedup, versions, `-until`, index) pending.
+  **bit-identical** to upstream and extract in both directions.
+  - JIDAC reading (`zqjidac.pas`): transaction/fragment/index blocks, versions,
+    `-until`, `list`, and `extract` of upstream journaling archives at all levels
+    (0–5), including multi-version rollback, verified against upstream's own
+    extraction.
+  - Journaling `add` (fragmentation, dedup, index writing) is **not implemented
+    yet**: the CLI rejects numeric methods with a clear message. The algorithm
+    and its bit-exactness requirements (sort keys, rolling hash, HTIndex,
+    block/method selection, h/i/c blocks) are documented in the plan and in
+    the upstream reference.
 
 ### E6 — Full verification and performance
 - `tests/matrix.sh`: cross matrix, both directions × levels × methods × options.

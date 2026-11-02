@@ -17,7 +17,7 @@ criterion.
 | E2 | ZPAQL VM + config compiler | ✅ identical (bytecode and traces); JIT pending |
 | E3 | predictor, arithmetic coder | ✅ identical (13 models, 4608 byte traces, encoder bytes); asm kernels pending |
 | E4 | container, postprocessors, LZ77/BWT, makeConfig | ✅ 38 archives extracted + 51 blocks compressed bit-exactly |
-| E5 | JIDAC archiver in Pascal | streaming add/extract ✅ (23 archives bit-identical); journaling pending |
+| E5 | JIDAC archiver in Pascal | streaming add/extract ✅ (23 archives bit-identical); JIDAC read/list/extract ✅ (all levels, multi-version, -until); journaling add pending |
 | E6 | bit-exact matrix, fuzzing, performance | pending |
 
 ## Build

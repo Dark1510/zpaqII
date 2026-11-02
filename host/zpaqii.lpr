@@ -6,7 +6,7 @@
 program zpaqii;
 {$mode objfpc}{$H+}
 
-uses SysUtils, Classes, zqcore, zqfile, zqarchive;
+uses SysUtils, Classes, zqcore, zqfile, zqarchive, zqjidac;
 
 const
   VERSION = 'zpaqII 0.1';
@@ -181,7 +181,7 @@ begin
   Result := 0;
 end;
 
-function ExtractArchive(const archive, toDir: string; listOnly: Boolean): Integer;
+function ExtractStreaming(const archive, toDir: string; listOnly: Boolean): Integer;
 var
   inArc: TInputArchive;
   r: TZqReader;
@@ -244,11 +244,58 @@ begin
   Result := 0;
 end;
 
+function RunExtract(const archive, toDir, key: string; listOnly, force: Boolean;
+                    untilVer: Int64): Integer;
+var
+  j: TJidac;
+  errors: Integer;
+  nfiles: Cardinal;
+  ver: Int64;
+begin
+  ver := untilVer;
+  j := TJidac.Create(archive, key, ver);
+  try
+    j.ReadArchive(errors, nfiles);
+    if j.isJidac then
+    begin
+      if listOnly then
+      begin
+        j.List;
+        Result := 0;
+      end
+      else
+        Result := j.Extract(toDir, force);
+    end
+    else
+      Result := ExtractStreaming(archive, toDir, listOnly);
+    if errors <> 0 then Inc(Result, errors);
+  finally
+    j.Free;
+  end;
+end;
+
+function ParseUntil(const s: string): Int64;
+var
+  i: Integer;
+  v: Int64;
+begin
+  v := 0;
+  for i := 1 to Length(s) do
+    if (s[i] >= '0') and (s[i] <= '9') then v := v * 10 + Ord(s[i]) - Ord('0');
+  if (v >= 19000000) and (v <= 29991231) then v := v * 100 + 23;
+  if (v >= 1900000000) and (v <= 2999123123) then v := v * 100 + 59;
+  if (v >= 190000000000) and (v <= 299912312359) then v := v * 100 + 59;
+  if v < 19000101000000 then v := 1;   { version number }
+  Result := v;
+end;
+
 var
   cmd, archive, method, toDir, key: string;
   files: TStringList;
   i: Integer;
   a: string;
+  untilVer: Int64;
+  force: Boolean;
 
 begin
   if ParamCount < 1 then
@@ -267,6 +314,8 @@ begin
   method := '1';
   toDir := '.';
   key := '';
+  untilVer := DEFAULT_VERSION;
+  force := False;
   files := TStringList.Create;
   try
     i := 2;
@@ -288,6 +337,13 @@ begin
         Inc(i);
         key := ParamStr(i);
       end
+      else if (a = '-force') then
+        force := True
+      else if (a = '-until') then
+      begin
+        Inc(i);
+        untilVer := ParseUntil(ParamStr(i));
+      end
       else if (a <> '') and (a[1] = '-') then
         Fail('unknown option ' + a)
       else if archive = '' then
@@ -303,15 +359,17 @@ begin
     if cmd = 'add' then
     begin
       if files.Count = 0 then Fail('no files to add');
+      if (method = '') or (method[1] <> 's') then
+        Fail('journaling add is not implemented yet; use -method s...');
       { upstream scans into a map keyed by name: byte order, case sensitive }
       files.CaseSensitive := True;
       files.Sort;
       Halt(AddStreaming(archive, method, files));
     end
     else if (cmd = 'extract') or (cmd = 'x') then
-      Halt(ExtractArchive(archive, toDir, False))
+      Halt(RunExtract(archive, toDir, key, False, force, untilVer))
     else if (cmd = 'list') or (cmd = 'l') then
-      Halt(ExtractArchive(archive, toDir, True))
+      Halt(RunExtract(archive, toDir, key, True, force, untilVer))
     else
     begin
       Usage;

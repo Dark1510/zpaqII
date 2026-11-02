@@ -53,6 +53,7 @@ function zq_buf_data(b: TZqBuf): PAnsiChar; cdecl; external;
 procedure zq_buf_reset(b: TZqBuf); cdecl; external;
 procedure zq_buf_seek_read(b: TZqBuf; pos: SizeUInt); cdecl; external;
 function zq_buf_get(b: TZqBuf): LongInt; cdecl; external;
+procedure zq_buf_set_limit(b: TZqBuf; n: SizeUInt); cdecl; external;
 function zq_buf_read(b: TZqBuf; p: PAnsiChar; n: LongInt): LongInt; cdecl; external;
 function zq_buf_reader(b: TZqBuf): TZqReader; cdecl; external;
 function zq_buf_writer(b: TZqBuf): TZqWriter; cdecl; external;
@@ -84,6 +85,7 @@ function zq_d_find_filename(d: TZqDecompresser; w: PZqWriter): LongInt; cdecl; e
 function zq_d_read_comment(d: TZqDecompresser; w: PZqWriter): LongInt; cdecl; external;
 function zq_d_decompress(d: TZqDecompresser; n: LongInt): LongInt; cdecl; external;
 function zq_d_read_segment_end(d: TZqDecompresser; sha1str: PAnsiChar): LongInt; cdecl; external;
+function zq_d_buffered(d: TZqDecompresser): LongInt; cdecl; external;
 
 { --- compressor --- }
 function zq_compress_block(b: TZqBuf; var w: TZqWriter; method, filename, comment: PAnsiChar; dosha1: LongInt): LongInt; cdecl; external;
