@@ -60,7 +60,43 @@ executable memory with `mmap`.
 the core builds with `ZQ_NOJIT` and behaviour is identical (measured: within
 25 % of the JIT on the models). An ARM64 JIT is a separate, later item.
 
-### 2. Host OS layer
+### 2. Host OS layer — done for Linux and Windows x86-64
+
+`zqfile.pas` is now the only unit with system calls.  It has two
+implementations selected by `{$IFDEF WINDOWS}`:
+
+| primitive | Unix | Windows |
+|---|---|---|
+| file metadata | `fpLStat` (does not follow links) | `GetFileAttributesExW`; a reparse point is neither file nor directory, so the scanner skips it like upstream |
+| attributes | `'u' + (mode << 8)` | `'w' + (dwFileAttributes << 8)`, exactly upstream's encoding |
+| date | `st_mtime` | `ftLastWriteTime` (UTC), same `YYYYMMDDHHMMSS` |
+| set date/attrs | `fpUtime` + `fpChmod` | `SetFileTime` + `SetFileAttributesW` |
+| open read/write | `fpOpen` | `CreateFileW` |
+| mkdir | `fpMkdir` | `CreateDir` |
+| clock | `fpGetTimeOfDay` | `GetTickCount64` (only differences are used) |
+| CPU count | `/proc/cpuinfo` | `GetSystemInfo` |
+
+`zqjidac.pas` no longer uses `BaseUnix`/`Unix` at all; its `OpenIn`/`OpenOut`
+delegate to `zqfile`.
+
+Verified: `make win64` produces `build/win64/zpaqii.exe` (core as `zqcore.dll`
++ the Pascal host, cross-compiled with FPC's win64 units), and in a Windows 10
+VM:
+
+* `zpaqii.exe add` of a small tree, then **upstream 7.15 on Linux extracts it
+  correctly**;
+* an archive written by upstream on Linux extracts correctly with
+  `zpaqii.exe`.
+
+Windows x86: the core builds and its E1 vectors were run in a Windows 7 SP1
+VM; the 32-bit *host* needs FPC on Windows itself, because Debian ships no
+i386-win32 units (`tools/win.sh win32` builds the core and the tests).
+
+Still missing on the host: macOS arm64 (no hardware here; the code has no
+Unix-specific calls left outside `zqfile`, but it must be built and tested on a
+Mac), and the Windows-only extras (alternate data streams) of §2.5.
+
+### 3. Host OS layer (old plan, kept for the record)
 
 `zqfile.pas` and `zqjidac.pas` use `BaseUnix`/`Unix`:
 
@@ -94,6 +130,15 @@ Plan:
   CI (GitHub Actions matrix: ubuntu-latest, ubuntu-24.04-arm, windows-latest,
   macos-14).
 * The `.lpr` must stop passing `-k-l` Unix link flags on Windows.
+
+## Build entry points
+
+| command | what it does |
+|---|---|
+| `make` / `make test` | Linux x86-64 |
+| `make cross` | core for x86-64, i386 (`-m32`), arm64 (qemu), Windows x64/x86 |
+| `make win64` | `build/win64/zpaqii.exe` + `zqcore.dll` |
+| `make win32` | 32-bit core, tests and DLL (no host) |
 
 ## Order
 

@@ -1,31 +1,41 @@
-{ zpaqII - file helpers and date/attribute conversion.
-  Port of zpaq 7.15 (Unlicense, Matt Mahoney), unix side. }
+{ zpaqII - file helpers, dates and attributes.
+
+  Port of zpaq 7.15 (Unlicense, Matt Mahoney) for both sides: Unix stores
+  attributes as 'u' + (mode << 8) and Windows as 'w' + (attributes << 8), which
+  is exactly what upstream does on each platform. }
 
 unit zqfile;
 {$mode objfpc}{$H+}
 
 interface
 
-uses SysUtils, Classes, BaseUnix, Unix;
+uses SysUtils, Classes
+{$IFDEF WINDOWS}
+  , Windows
+{$ELSE}
+  , BaseUnix, Unix
+{$ENDIF};
 
 { 64-bit decimal YYYYMMDDHHMMSS from a unix time_t }
 function DecimalTime(tt: Int64): Int64;
 { inverse of DecimalTime; -1 if date <= 0 }
 function UnixTime(date: Int64): Int64;
-{ current time in milliseconds }
+{ current time in milliseconds (monotonic: only differences are used) }
 function MTime: Int64;
 { "YYYY-MM-DD HH:MM:SS" or blanks }
 function DateToString(date: Int64): string;
-{ attribute string as shown by list (unix mode bits) }
+{ attribute string as shown by list (unix mode bits or Windows attributes) }
 function AttrToString(attrib: Int64): string;
 
-{ mtime (decimal), size and unix attributes ('u'+mode<<8) of a file }
+{ mtime (decimal), size, attributes and type of a file.  Symlinks are not
+  followed: isReg and isDir are both False for them (and for devices, fifos
+  and sockets), so the scanner can skip them silently. }
 procedure FileInfo(const fn: string; out date, size, attr: Int64;
-                   out isDir: Boolean);
+                   out isDir, isReg: Boolean);
 
 function FileExistsUTF8(const fn: string): Boolean;
 function DeleteFileUTF8(const fn: string): Boolean;
-{ set mtime and permissions if date/attr are non-zero }
+{ set mtime and attributes if date/attr are non-zero }
 procedure CloseFileAttrs(const fn: string; date, attr: Int64);
 { create parent directories of path }
 procedure MakePath(const path: string; date: Int64 = 0; attr: Int64 = 0);
@@ -35,6 +45,16 @@ function Itos(x: Int64; n: Integer = 1): string;
 function SubPart(const fn: string; part: Integer): string;
 { number of online CPUs (1 if it cannot be determined) }
 function CPUCount: Integer;
+{ last error of the system call that failed (errno or GetLastError) }
+function FileGetErrno: Integer;
+{ the text upstream prints for a file that does not exist }
+function MissingFileMessage: string;
+
+{ Open an input file like upstream's fopen(RB); nil and a message on stderr on
+  failure (upstream's printerr). }
+function OpenRead(const path: string): TStream;
+{ Open an output file like upstream's fopen; create=True truncates. }
+function OpenWrite(const path: string; create: Boolean): TStream;
 
 implementation
 
@@ -86,13 +106,44 @@ begin
             minute * 60 + sec;
 end;
 
+{$IFDEF WINDOWS}
+{ 100 ns intervals since 1601 -> unix seconds }
+function FileTimeToUnix(const ft: TFileTime): Int64;
+var
+  v: Int64;
+begin
+  v := (Int64(ft.dwHighDateTime) shl 32) or Int64(ft.dwLowDateTime);
+  Result := v div 10000000 - 11644473600;
+end;
+
+function UnixToFileTime(t: Int64): TFileTime;
+var
+  v: Int64;
+begin
+  v := (t + 11644473600) * 10000000;
+  Result.dwLowDateTime := DWORD(v and $FFFFFFFF);
+  Result.dwHighDateTime := DWORD((v shr 32) and $FFFFFFFF);
+end;
+
+function WidePath(const fn: string): UnicodeString;
+begin
+  Result := UTF8Decode(fn);
+end;
+{$ENDIF}
+
 function MTime: Int64;
+{$IFDEF WINDOWS}
+begin
+  Result := Int64(GetTickCount64);
+end;
+{$ELSE}
 var
   tv: TTimeVal;
 begin
   fpGetTimeOfDay(@tv, nil);
   Result := Int64(tv.tv_sec) * 1000 + tv.tv_usec div 1000;
 end;
+{$ENDIF}
 
 function DateToString(date: Int64): string;
 const
@@ -116,6 +167,9 @@ end;
 function AttrToString(attrib: Int64): string;
 const
   types = '0pc3d5b7 9lBsDEF';
+  wtypes = 'ANH SRHA  T';
+var
+  i: Integer;
 begin
   Result := '     ';
   if (attrib and 255) = Ord('u') then
@@ -125,12 +179,41 @@ begin
     Result[4] := Chr(Ord('0') + (attrib shr (8 + 3)) mod 8);
     Result[3] := Chr(Ord('0') + (attrib shr (8 + 6)) mod 8);
     Result[2] := Chr(Ord('0') + (attrib shr (8 + 9)) mod 8);
+  end
+  else if (attrib and 255) = Ord('w') then
+  begin
+    { upstream's attrToString for 'w': one letter per attribute bit }
+    for i := 0 to 3 do
+      if ((attrib shr (i + 8)) and 1) <> 0 then Result[i + 1] := wtypes[i + 1];
   end;
 end;
 
-{ mtime (decimal), size and unix attributes ('u'+mode<<8) of a file }
 procedure FileInfo(const fn: string; out date, size, attr: Int64;
-  out isDir: Boolean);
+  out isDir, isReg: Boolean);
+{$IFDEF WINDOWS}
+var
+  fad: TWin32FileAttributeData;
+begin
+  date := 0;
+  size := 0;
+  attr := 0;
+  isDir := False;
+  isReg := False;
+  if GetFileAttributesExW(PWideChar(WidePath(fn)), GetFileExInfoStandard,
+                          @fad) then
+  begin
+    date := DecimalTime(FileTimeToUnix(fad.ftLastWriteTime));
+    attr := Ord('w') + (Int64(fad.dwFileAttributes) shl 8);
+    isDir := (fad.dwFileAttributes and FILE_ATTRIBUTE_DIRECTORY) <> 0;
+    { a reparse point (symlink, junction) is neither: upstream skips it }
+    if (fad.dwFileAttributes and FILE_ATTRIBUTE_REPARSE_POINT) = 0 then
+    begin
+      size := (Int64(fad.nFileSizeHigh) shl 32) or Int64(fad.nFileSizeLow);
+      isReg := not isDir;
+    end;
+  end;
+end;
+{$ELSE}
 var
   st: Stat;
 begin
@@ -138,13 +221,16 @@ begin
   size := 0;
   attr := 0;
   isDir := False;
+  isReg := False;
   { lstat, not stat: upstream does not follow symbolic links when scanning }
   if fpLStat(fn, st) <> 0 then Exit;
   date := DecimalTime(st.st_mtime);
   size := st.st_size;
   attr := Ord('u') + (Int64(st.st_mode) shl 8);
   isDir := fpS_ISDIR(st.st_mode);
+  isReg := fpS_ISREG(st.st_mode);
 end;
+{$ENDIF}
 
 function FileExistsUTF8(const fn: string): Boolean;
 begin
@@ -157,6 +243,34 @@ begin
 end;
 
 procedure CloseFileAttrs(const fn: string; date, attr: Int64);
+{$IFDEF WINDOWS}
+var
+  h: THandle;
+  ft: TFileTime;
+begin
+  if fn = '' then Exit;
+  if (date > 0) or ((attr and 255) = Ord('w')) then
+  begin
+    h := CreateFileW(PWideChar(WidePath(fn)),
+                     FILE_WRITE_ATTRIBUTES,
+                     FILE_SHARE_READ or FILE_SHARE_WRITE or
+                     FILE_SHARE_DELETE, nil, OPEN_EXISTING,
+                     FILE_FLAG_BACKUP_SEMANTICS, 0);
+    if h <> INVALID_HANDLE_VALUE then
+    begin
+      if date > 0 then
+      begin
+        ft := UnixToFileTime(UnixTime(date));
+        SetFileTime(h, nil, nil, @ft);
+      end;
+      CloseHandle(h);
+    end;
+  end;
+  { the attributes are stored as-are, like upstream's SetFileAttributes }
+  if (attr and 255) = Ord('w') then
+    SetFileAttributesW(PWideChar(WidePath(fn)), DWORD((attr shr 8) and $FFFF));
+end;
+{$ELSE}
 var
   ut: TUTimBuf;
   tv: TTimeVal;
@@ -172,6 +286,7 @@ begin
   if (attr and 255) = Ord('u') then
     fpChmod(PChar(fn), attr shr 8);
 end;
+{$ENDIF}
 
 procedure MakePath(const path: string; date: Int64 = 0; attr: Int64 = 0);
 var
@@ -183,7 +298,7 @@ begin
     if (p[i] = '/') or (p[i] = '\') then
     begin
       p[i] := #0;
-      if p <> '' then fpMkdir(PChar(p), &777);
+      if p <> '' then CreateDir(p);
       p[i] := '/';
     end;
   p := path;
@@ -198,6 +313,15 @@ begin
 end;
 
 function CPUCount: Integer;
+{$IFDEF WINDOWS}
+var
+  si: TSystemInfo;
+begin
+  GetSystemInfo(si);
+  Result := Integer(si.dwNumberOfProcessors);
+  if Result < 1 then Result := 1;
+end;
+{$ELSE}
 var
   fs: TFileStream;
   buf: array[0..8191] of AnsiChar;
@@ -226,6 +350,7 @@ begin
   end;
   if Result < 1 then Result := 1;
 end;
+{$ENDIF}
 
 function SubPart(const fn: string; part: Integer): string;
 var
@@ -247,5 +372,93 @@ begin
     end;
   end;
 end;
+
+function FileGetErrno: Integer;
+{$IFDEF WINDOWS}
+begin
+  Result := Integer(GetLastError);
+end;
+{$ELSE}
+begin
+  Result := fpGetErrno;
+end;
+{$ENDIF}
+
+function MissingFileMessage: string;
+{$IFDEF WINDOWS}
+begin
+  Result := 'file not found';   { upstream's printerr on Windows }
+end;
+{$ELSE}
+begin
+  Result := 'No such file or directory';
+end;
+{$ENDIF}
+
+function OpenRead(const path: string): TStream;
+{$IFDEF WINDOWS}
+var
+  h: THandle;
+begin
+  Result := nil;
+  h := CreateFileW(PWideChar(WidePath(path)), GENERIC_READ,
+                   FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE,
+                   nil, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+  if h = INVALID_HANDLE_VALUE then
+  begin
+    WriteLn(StdErr, path, ': ', SysErrorMessage(GetLastError));
+    Exit;
+  end;
+  Result := THandleStream.Create(h);
+end;
+{$ELSE}
+var
+  h: THandle;
+begin
+  Result := nil;
+  h := fpOpen(PChar(path), O_RDONLY, 0);
+  if h < 0 then
+  begin
+    WriteLn(StdErr, path, ': ', SysErrorMessage(fpGetErrno));
+    Exit;
+  end;
+  Result := THandleStream.Create(h);
+end;
+{$ENDIF}
+
+function OpenWrite(const path: string; create: Boolean): TStream;
+{$IFDEF WINDOWS}
+var
+  h: THandle;
+  disp: DWORD;
+begin
+  Result := nil;
+  if create then disp := CREATE_ALWAYS else disp := OPEN_EXISTING;
+  h := CreateFileW(PWideChar(WidePath(path)), GENERIC_READ or GENERIC_WRITE,
+                   FILE_SHARE_READ, nil, disp, FILE_ATTRIBUTE_NORMAL, 0);
+  if h = INVALID_HANDLE_VALUE then
+  begin
+    WriteLn(StdErr, path, ': ', SysErrorMessage(GetLastError));
+    Exit;
+  end;
+  Result := THandleStream.Create(h);
+end;
+{$ELSE}
+var
+  h: THandle;
+begin
+  Result := nil;
+  if create then
+    h := fpOpen(PChar(path), O_RDWR or O_CREAT or O_TRUNC, &666)
+  else
+    h := fpOpen(PChar(path), O_RDWR, 0);
+  if h < 0 then
+  begin
+    WriteLn(StdErr, path, ': ', SysErrorMessage(fpGetErrno));
+    Exit;
+  end;
+  Result := THandleStream.Create(h);
+end;
+{$ENDIF}
 
 end.

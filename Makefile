@@ -31,7 +31,7 @@ BUILD    := build$(if $(DEBUG),-debug,)$(if $(NOJIT),-nojit,)
 CORE_SRC := $(wildcard src/core/*.c)
 CORE_OBJ := $(patsubst src/core/%.c,$(BUILD)/obj/%.o,$(CORE_SRC))
 
-.PHONY: all lib test test-e1 test-sha1hw test-fragchain cross oracle clean info
+.PHONY: all lib test test-e1 test-sha1hw test-fragchain cross win64 win32 oracle clean info
 
 all: lib test
 
@@ -101,6 +101,13 @@ $(BUILD)/sha1_hw: tests/unit/sha1_hw.c $(BUILD)/libzqcore.a
 # Every target we can compile for, and every test we can run here.
 cross: $(BUILD)/e1_upstream.txt
 	@tools/cross.sh
+
+# Windows builds from Linux (mingw + FPC with the win64 units).
+win64:
+	@tools/win.sh win64
+
+win32:
+	@tools/win.sh win32
 
 test-e2: $(BUILD)/zpaql_dump $(BUILD)/e2_oracle
 	@$(BUILD)/e2_oracle $(BUILD)/e2_manifest.txt $(BUILD)/e2_upstream.txt

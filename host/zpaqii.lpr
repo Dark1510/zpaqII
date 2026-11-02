@@ -280,7 +280,7 @@ var
   b: TZqBuf;
   i: Integer;
   bs, size, date, attr, n: Int64;
-  isDir: Boolean;
+  isDir, isReg: Boolean;
   fs: TFileStream;
   tmp: array[0..4095] of AnsiChar;
   nr, first: Integer;
@@ -337,7 +337,7 @@ begin
 
   for i := 0 to files.Count - 1 do
   begin
-    FileInfo(files[i], date, size, attr, isDir);
+    FileInfo(files[i], date, size, attr, isDir, isReg);
     if date <> 0 then Inc(totalSize, size);
   end;
   WriteLn('Adding ', Format('%1.6f', [totalSize / 1000000.0]), ' MB in ',
@@ -350,7 +350,7 @@ begin
   for i := 0 to files.Count - 1 do
   begin
     order[i] := i;
-    FileInfo(files[i], date, size, attr, isDir);
+    FileInfo(files[i], date, size, attr, isDir, isReg);
     keys[i] := AddSortKey(files[i], size);
   end;
   for si := 1 to High(order) do
@@ -376,7 +376,7 @@ begin
       for si := 0 to High(order) do
       begin
         i := order[si];
-        FileInfo(files[i], date, size, attr, isDir);
+        FileInfo(files[i], date, size, attr, isDir, isReg);
         if date = 0 then
         begin
           WriteLn(StdErr, 'zpaqii: cannot read ', files[i]);

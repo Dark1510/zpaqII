@@ -6,7 +6,7 @@ unit zqjidac;
 
 interface
 
-uses SysUtils, Classes, BaseUnix, SyncObjs, zqcore, zqfile, zqarchive;
+uses SysUtils, Classes, SyncObjs, zqcore, zqfile, zqarchive;
 
 const
   ZQ_RED_DT: array[0..255] of Byte = (
@@ -1181,8 +1181,7 @@ begin
   if not FileExistsUTF8(SubPart(arcName, 1)) then
   begin
     { upstream's InputArchive::open() calls ioerr(): perror + throw }
-    WriteLn(StdErr, SubPart(arcName, 1), ': ',
-            SysErrorMessage(ESysENOENT));
+    WriteLn(StdErr, SubPart(arcName, 1), ': ', MissingFileMessage);
     raise Exception.Create(SubPart(arcName, 1));
   end;
   Write(arcName);
@@ -1899,36 +1898,15 @@ end;
 { Open an input file like upstream's fopen(RB): on failure print
   "<path>: <error>" (printerr) and return nil. }
 function OpenIn(const path: string): TStream;
-var
-  h: THandle;
 begin
-  Result := nil;
-  h := fpOpen(PChar(path), O_RDONLY, 0);
-  if h < 0 then
-  begin
-    WriteLn(StdErr, path, ': ', SysErrorMessage(fpGetErrno));
-    Exit;
-  end;
-  Result := THandleStream.Create(h);
+  Result := OpenRead(path);
 end;
 
 { Open an output file like upstream's fopen: on failure print "<path>: <error>"
   (printerr) and return nil.  create=True truncates, otherwise it must exist. }
 function OpenOut(const path: string; create: Boolean): TStream;
-var
-  h: THandle;
 begin
-  Result := nil;
-  if create then
-    h := fpOpen(PChar(path), O_RDWR or O_CREAT or O_TRUNC, &666)
-  else
-    h := fpOpen(PChar(path), O_RDWR, 0);
-  if h < 0 then
-  begin
-    WriteLn(StdErr, path, ': ', SysErrorMessage(fpGetErrno));
-    Exit;
-  end;
-  Result := THandleStream.Create(h);
+  Result := OpenWrite(path, create);
 end;
 
 { Label the entries to extract (upstream's loop): decides dt[].data (-1 skip,
@@ -2362,22 +2340,20 @@ end;
 procedure TJidac.ScanInto(edt: TStringList; const name: string);
 var
   date, size, attr: Int64;
-  isDir: Boolean;
+  isDir, isReg: Boolean;
   idx: Integer;
   e: TEdtEntry;
   sr: TSearchRec;
   fn, sub, nm: string;
 begin
-  FileInfo(name, date, size, attr, isDir);
-  { upstream's scandir: only regular files (S_IFREG) and directories (S_IFDIR)
-    are recorded; a symbolic link or a device is skipped without a message }
-  if (date <> 0) and (((attr shr 8) and $F000) <> $8000) and
-     (((attr shr 8) and $F000) <> $4000) then
-    Exit;
+  FileInfo(name, date, size, attr, isDir, isReg);
+  { upstream's scandir: only regular files and directories are recorded; a
+    symbolic link, device, fifo or socket is skipped without a message }
+  if (date <> 0) and (not isDir) and (not isReg) then Exit;
   if date = 0 then
   begin
     { upstream's scandir: perror() for a file that cannot be stat'ed }
-    WriteLn(StdErr, name, ': ', SysErrorMessage(fpGetErrno));
+    WriteLn(StdErr, name, ': ', SysErrorMessage(FileGetErrno));
     Exit;
   end;
   nm := name;
