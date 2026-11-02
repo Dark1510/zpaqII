@@ -65,6 +65,7 @@ type
 function zq_sha256_new: TZqSha256; cdecl; external;
 procedure zq_sha256_free(s: TZqSha256); cdecl; external;
 procedure zq_sha256_put(s: TZqSha256; c: LongInt); cdecl; external;
+procedure zq_sha256_write(s: TZqSha256; buf: PAnsiChar; n: Int64); cdecl; external;
 function zq_sha256_result(s: TZqSha256): PAnsiChar; cdecl; external;
 
 function zq_sha1_new: TZqSha1; cdecl; external;
@@ -74,6 +75,31 @@ procedure zq_sha1_put(s: TZqSha1; c: LongInt); cdecl; external;
 procedure zq_sha1_write(s: TZqSha1; buf: PAnsiChar; n: Int64); cdecl; external;
 function zq_sha1_result(s: TZqSha1): PAnsiChar; cdecl; external;
 function zq_sha1_usize(s: TZqSha1): QWord; cdecl; external;
+
+{ --- extra digests (integrity lists) --- }
+type
+  TZqCrc32 = record
+    crc: Cardinal;
+  end;
+  PZqCrc32 = ^TZqCrc32;
+
+  { Matches struct zq_xxh64 in include/zq.h byte for byte. }
+  TZqXxh64 = record
+    v1, v2, v3, v4: QWord;
+    total: QWord;
+    seed: QWord;
+    n: LongInt;
+    started: LongInt;
+    buf: array[0..31] of Byte;
+  end;
+  PZqXxh64 = ^TZqXxh64;
+
+procedure zq_crc32_init(var s: TZqCrc32); cdecl; external;
+procedure zq_crc32_write(var s: TZqCrc32; p: Pointer; n: SizeInt); cdecl; external;
+function zq_crc32_result(s: PZqCrc32): Cardinal; cdecl; external;
+procedure zq_xxh64_init(var s: TZqXxh64; seed: QWord); cdecl; external;
+procedure zq_xxh64_write(var s: TZqXxh64; p: Pointer; n: SizeInt); cdecl; external;
+function zq_xxh64_result(s: PZqXxh64): QWord; cdecl; external;
 
 { --- fragment scanner: the cut loop of add() --- }
 type

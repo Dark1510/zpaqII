@@ -151,6 +151,31 @@ double      zq_sha1_size(const zq_sha1 *s);
 zq_u64      zq_sha1_usize(const zq_sha1 *s);
 
 /* ------------------------------------------------------------------ */
+/* Extra digests (phase 2.3 integrity lists)                           */
+/* ------------------------------------------------------------------ */
+
+typedef struct zq_crc32 {
+  zq_u32 crc;
+} zq_crc32;
+
+void   zq_crc32_init(zq_crc32 *s);
+void   zq_crc32_write(zq_crc32 *s, const void *p, size_t n);
+zq_u32 zq_crc32_result(const zq_crc32 *s);
+
+typedef struct zq_xxh64 {
+  zq_u64 v1, v2, v3, v4;
+  zq_u64 total;   /* bytes written so far */
+  zq_u64 seed;
+  int    n;       /* bytes buffered (always < 32 between calls) */
+  int    started; /* the four lanes have been initialised */
+  zq_u8  buf[32];
+} zq_xxh64;
+
+void   zq_xxh64_init(zq_xxh64 *s, zq_u64 seed);
+void   zq_xxh64_write(zq_xxh64 *s, const void *p, size_t n);
+zq_u64 zq_xxh64_result(const zq_xxh64 *s);
+
+/* ------------------------------------------------------------------ */
 /* Fragment scanner (the content-defined cut loop of add)              */
 /* ------------------------------------------------------------------ */
 

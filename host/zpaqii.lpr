@@ -656,6 +656,7 @@ var
   dotest, noattrs: Boolean;
   allver: Integer;
   turboVal: Integer;
+  hashFlag: Boolean;
   tmp: TJidac;
   errs2: Integer;
   nfiles2: Cardinal;
@@ -693,6 +694,7 @@ begin
   force := False;
   frag := 6;
   turboVal := 0;
+  hashFlag := False;
   GThreads := 0;
   summary := 0;
   nottype := '';
@@ -806,6 +808,8 @@ begin
       end
       else if (a = '-noturbo') then
         turboVal := -1
+      else if (a = '-hash') then
+        hashFlag := True
       else if (a = '-strict') then
       begin
         if not Legacy715 then StrictMode := True;
@@ -945,6 +949,7 @@ begin
         jadd.summary := summary;
         jadd.threads := GThreads;
         jadd.turbo := turboVal;
+        jadd.hashList := hashFlag;
         jadd.indexName := indexName;
         for i := 0 to files.Count - 1 do jadd.files.Add(files[i]);
         for i := 0 to tofiles.Count - 1 do jadd.tofiles.Add(tofiles[i]);

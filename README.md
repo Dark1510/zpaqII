@@ -42,6 +42,7 @@ zpaqII writes.  Phase 2 adds behaviour, never bytes:
 | `-turbo [N]` / `-noturbo` | cut and hash large files in N threads (default: as `-t`). The fragments, and the archive, are the ones the serial loop produces. |
 | `-strict` | command-line errors (unknown option or command, misplaced word, missing archive, bad value) exit 2 with a message instead of 7.15's usage-and-1 or silent 0. |
 | `-715` | pin 7.15 behaviour and bytes: clears `-strict`, disables `-turbo`; whatever the argument order. |
+| `-hash` | on `add`, store a digest list (`VFILE-hash.txt`: XXH64, CRC-32, SHA-256, size, name per file) as an ordinary file of the transaction, so plain zpaq still reads the archive. |
 
 ## Build
 

@@ -918,3 +918,42 @@ Both have a check in `tests/cli.sh` (128 checks).
 The "compatibility level" report (which program can open this archive) is
 deferred: our archive format is still exactly 7.15's, so there is nothing to
 report until 2.3/2.4 add extensions.
+
+## 2.3a: extra digests (CRC-32 and XXH64)
+
+`src/core/digest.c` adds two streamed, portable digests next to the SHA-1/SHA-256
+already there:
+
+* `zq_crc32` — the IEEE CRC-32 zlib uses (table built once, byte loop);
+* `zq_xxh64` — XXH64 with a seed, 32-byte blocks, no unaligned reads and no
+  endianness assumptions.
+
+`make test-digest` checks them against vectors generated with `zlib.crc32` and
+the reference `xxhash` package, and checks that writing in arbitrary pieces
+gives the same answer as one call (71 cases).
+
+## 2.3b: `-hash` stores a digest list inside the archive
+
+`add -hash` appends one more file to the transaction, `VFILE-hash.txt`:
+
+```
+zpaqII-hash 1
+<xxh64> <crc32> <sha256> <size> <name>
+...
+```
+
+It is an ordinary file, so plain zpaq 7.15 lists and extracts it (verified: the
+7.15 binary lists it as 0644 and extracts it byte for byte), and no format
+extension is involved.  The list is built from exactly the files the
+transaction adds (`vf`), and the entry goes into both `vf` (data) and `edt`
+(index), because the journaling index is written from `edt`.
+
+Verified independently: for a 2-file archive, the `crc32`, `sha256` and
+`xxh64` columns match Python's `zlib.crc32`, `hashlib.sha256` and
+`xxhash.xxh64` (seed 0).  `tests/cli.sh` adds three checks: 7.15 lists the
+file, both programs extract the same tree, and the list has one line per file
+(131 checks).
+
+Pending for 2.3: the `check` command that verifies an archive against that
+list without writing the files to disk (a stream that hashes instead of
+writing, plugged where the extractor opens the output file).

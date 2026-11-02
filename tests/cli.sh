@@ -105,6 +105,21 @@ ZPAQII_NOW=$NOW ZPAQII_TURBO_MIN=1 "$P" add t715.zpaq tb -m1 -715 -turbo 8 \
 if cmp -s tu.zpaq t715.zpaq; then ok; else bad "-715 bytes"; fi
 rm -rf tb
 
+# ---- -hash: the digest list travels inside the archive, readable by 7.15 ----
+rm -f hz.zpaq
+ZPAQII_NOW=$NOW "$P" add hz.zpaq d -m1 -hash >/dev/null 2>&1
+if "$Z" list hz.zpaq -t1 2>/dev/null | grep -q 'VFILE-hash.txt'; then ok
+else bad "-hash: 7.15 does not list VFILE-hash.txt"; fi
+rm -rf xu xo
+mkdir xu xo
+"$Z" x hz.zpaq -to xu -t1 >/dev/null 2>&1
+"$P" x hz.zpaq -to xo >/dev/null 2>&1
+if diff -r xu xo >/dev/null 2>&1 && diff -r d xu/d >/dev/null 2>&1; then ok
+else bad "-hash: extraction"; fi
+# one line for the header plus one per file (3 files in the corpus)
+n=$(grep -c . xu/VFILE-hash.txt 2>/dev/null)
+if [ "$n" = 4 ]; then ok; else bad "-hash: list has ${n:-0} lines"; fi
+
 # ---- -to: single target, several targets, prefix rename ----
 extract_both() { # tag, args...
   local tag=$1

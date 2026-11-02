@@ -96,6 +96,7 @@ type
     methodSet: Boolean;      { -method given (rejected with -repack -all) }
     threads: Integer;        { -tN: compression threads, 0 = one per CPU }
     turbo: Integer;          { -turbo N: fragmenter threads, 0 = as -t, <0 = off }
+    hashList: Boolean;       { -hash: store the digest list inside the archive }
     indexName: string;       { -index F: index archive used by add/extract }
     dhsize: Int64;           { total size of D blocks according to H blocks }
     dcsize: Int64;           { total size of D blocks according to C blocks }
@@ -782,6 +783,7 @@ begin
   version := ver_;
   cmdDate := 0;
   turbo := 0;      { -turbo: 0 = as -t, < 0 = off }
+  hashList := False;
   SetLength(ht, 1);   { element 0 is not used, like upstream }
   FillChar(ht[0], SizeOf(THT), 0);
   SetLength(blocks, 0);
@@ -2855,6 +2857,8 @@ var
   nthreads: Integer;
   turboThreads: Integer;
   turboMin: Int64;
+  hashName: string;
+  hashData: AnsiString;
   sEnv: string;
   pair: TWriterPair;
   wpw: TZqWriter;
@@ -2870,6 +2874,55 @@ var
   ok: Boolean;
 const
   ON = 4;
+
+  { The digest list: one line per file, "xxh64 crc32 sha256 size name". }
+  function HashListOf(list: TStringList): AnsiString;
+  var
+    k, b: Integer;
+    ent: TEdtEntry;
+    fs: TFileStream;
+    buf: array[0..65535] of AnsiChar;
+    nr: LongInt;
+    crc: TZqCrc32;
+    xh: TZqXxh64;
+    sh: TZqSha256;
+    hres: PAnsiChar;
+    line: string;
+  begin
+    Result := 'zpaqII-hash 1' + #10;
+    for k := 0 to list.Count - 1 do
+    begin
+      ent := TEdtEntry(list.Objects[k]);
+      if (ent.date = 0) or (list[k] = '') or
+         (list[k][Length(list[k])] = '/') then Continue;
+      zq_crc32_init(crc);
+      zq_xxh64_init(xh, 0);
+      sh := zq_sha256_new;
+      try
+        fs := TFileStream.Create(list[k], fmOpenRead or fmShareDenyWrite);
+        try
+          repeat
+            nr := fs.Read(buf, SizeOf(buf));
+            if nr > 0 then
+            begin
+              zq_crc32_write(crc, @buf[0], nr);
+              zq_xxh64_write(xh, @buf[0], nr);
+              zq_sha256_write(sh, @buf[0], nr);
+            end;
+          until nr <= 0;
+        finally
+          fs.Free;
+        end;
+        hres := zq_sha256_result(sh);
+        line := Format('%.16x %.8x ', [zq_xxh64_result(@xh), zq_crc32_result(@crc)]);
+        for b := 0 to 31 do
+          line := line + LowerCase(IntToHex(Ord(hres[b]), 2));
+        Result := Result + line + ' ' + IntToStr(ent.size) + ' ' + list[k] + #10;
+      finally
+        zq_sha256_free(sh);
+      end;
+    end;
+  end;
 
   { One fragment, complete: dedupe against the archive, analysis, block
     decisions and table update.  Shared by the streaming path and by the
@@ -3425,6 +3478,26 @@ begin
     Inc(i);
   end;
 
+  { -hash: the digest list as an ordinary file of the transaction.  Plain
+    zpaq still reads the archive; it just sees one more file. }
+  if hashList then
+  begin
+    hashData := HashListOf(vf);
+    hashName := 'VFILE-hash.txt';
+    while vf.IndexOf(hashName) >= 0 do hashName := 'V' + hashName;
+    e := TEdtEntry.Create;
+    e.date := date;
+    e.size := Length(hashData);
+    e.attr := Ord('u') + (Int64($81A4) shl 8);   { 0100644 }
+    e.sortkey := 0;
+    e.data := 1;
+    SetLength(e.ptr, 0);
+    { the same entry in both lists: vf drives the data, edt the index }
+    vf.AddObject(hashName, e);
+    edt.AddObject(hashName, e);
+    Inc(total_size, e.size);
+  end;
+
   { Resolved thread count, as printed by upstream }
   ntAdd := threads;
   if ntAdd < 1 then ntAdd := CPUCount;
@@ -3520,7 +3593,15 @@ begin
       if fi < vf.Count then
       begin
         e := TEdtEntry(vf.Objects[fi]);
-        dst := OpenIn(vf[fi]);
+        if (hashName <> '') and (vf[fi] = hashName) then
+        begin
+          dst := TMemoryStream.Create;
+          if hashData <> '' then
+            dst.Write(hashData[1], Length(hashData));
+          dst.Position := 0;
+        end
+        else
+          dst := OpenIn(vf[fi]);
         if dst = nil then
         begin
           { upstream: skip the file, count the error and shrink the total }
