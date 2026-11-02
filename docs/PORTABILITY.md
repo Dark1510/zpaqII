@@ -131,6 +131,28 @@ Plan:
   macos-14).
 * The `.lpr` must stop passing `-k-l` Unix link flags on Windows.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` (all six jobs green on 2026-11-02):
+
+| job | machine | what it runs |
+|---|---|---|
+| `linux-x86_64` | ubuntu-latest | oracle + `make test`, `make matrix`, `make test-e6d` |
+| `linux-arm64` | ubuntu-24.04-arm | oracle + `make test`, `make matrix` |
+| `cross` | ubuntu-latest | core for arm64 (qemu), mingw x64/x86; `make win64`, `make win32`; uploads `zpaqii.exe` + `zqcore.dll` |
+| `cross-i386` | ubuntu-latest | 32-bit core (`gcc -m32`), E1 against the oracle |
+| `windows-wine` | ubuntu-latest | builds `zpaqii.exe` and does an add/extract roundtrip under wine |
+| `macos-arm64` | macos-14 | oracle + `make test-e1..e4b`, fragchain |
+
+Notes that the first runs taught:
+
+* the reference oracle must be built with `-DNOJIT` (`make oracle` does it):
+  upstream's own JIT emits x86-64 and dies on an ARM runner;
+* the JIT differential tests are skipped where the JIT does not exist
+  (`HAVE_JIT` in the Makefile, from `uname -m`);
+* the macOS job does not run the faketime tests (`LD_PRELOAD` is not a thing
+  there), so `-key`, `-until` and the CLI parity matrix stay Linux/Windows.
+
 ## Build entry points
 
 | command | what it does |
