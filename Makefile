@@ -81,7 +81,12 @@ $(BUILD)/e2_oracle: tools/oracle/e2_dump.cpp
 	@mkdir -p $(BUILD)
 	$(CXX) -O2 -Dunix -I$(UPSTREAM) $< $(UPSTREAM)/libzpaq.cpp -o $@
 
-oracle:
+oracle: $(UPSTREAM)/zpaq
+
+$(UPSTREAM)/zpaq:
+	@if [ ! -d $(UPSTREAM)/.git ]; then \
+	  git clone --depth 1 https://github.com/zpaq/zpaq.git $(UPSTREAM); \
+	fi
 	$(MAKE) -C $(UPSTREAM) zpaq
 
 clean:
