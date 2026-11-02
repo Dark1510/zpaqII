@@ -691,3 +691,20 @@ Both commands now report I/O failures per file and keep going, like upstream:
 
 `tests/cli.sh` exercises both with an unreadable file and a read-only directory
 (97 checks).
+
+## E22g: usage text, unknown options, streaming block errors
+
+* The usage text is upstream's, verbatim, including the dynamic
+  `-until <current UTC date>` line and the `(default: 0 = N cores)` count,
+  which is upstream's `threads` variable at the moment `usage()` runs (0 during
+  parsing, the resolved CPU count afterwards).
+* Unknown options print `Unknown option ignored: <opt>` and then the usage,
+  exiting 1 (the port used to abort with its own message).  `-h`, `--help` and
+  `help` are not commands in upstream either, so they now take the same path.
+* A rejected usage path exits without the `N seconds (...)` line, like
+  upstream's `exit(1)` inside `usage()`.
+* Streaming extraction reports `Skipping block: <msg>` per damaged block and
+  continues instead of aborting.
+
+`tests/cli.sh` compares the full output (and exit code) of: no arguments, `-h`,
+`help`, an unknown option, an unknown command (103 checks).

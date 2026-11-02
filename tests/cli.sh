@@ -360,6 +360,30 @@ fi
 cd ..
 
 
+# ---- usage: unknown options and commands match upstream ----
+usagecmp() {  # tag, args...
+  local tag=$1
+  shift
+  "$Z" "$@" >uu.txt 2>uu.err
+  ru=$?
+  "$P" "$@" >pp.txt 2>pp.err
+  rp=$?
+  if [ "$ru" = "$rp" ] &&
+     diff <(norm <uu.txt | sed -E 's/-until [0-9-]+ [0-9:]+/-until DATE/') \
+          <(norm <pp.txt | sed -E 's/-until [0-9-]+ [0-9:]+/-until DATE/') \
+          >/dev/null 2>&1 &&
+     diff <(norm <uu.err) <(norm <pp.err) >/dev/null 2>&1; then
+    ok
+  else
+    bad "usage $tag (rc $ru/$rp)"
+  fi
+}
+usagecmp "no args"
+usagecmp "-h" -h
+usagecmp "help" help
+usagecmp "unknown option" list base.zpaq -zzz
+usagecmp "unknown command" foo bar
+
 # ---- convert: upstream parses it but has no command, so usage + exit 1 ----
 "$Z" convert base.zpaq >/dev/null 2>&1
 ru=$?

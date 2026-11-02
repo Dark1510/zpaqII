@@ -15,19 +15,33 @@ const
 var
   GName: AnsiString;
   GStart: Int64;
+  GThreads: Integer = 0;   { -tN: 0 = auto-detect, like upstream's threads }
 
-{ End the program: print the elapsed time like upstream (stderr) and exit. }
-procedure Finish(code: Integer);
+{ End the program: print the elapsed time like upstream (stderr) and exit.
+  quiet is used for the usage paths, which upstream exits before printing it. }
+procedure Finish(code: Integer; quiet: Boolean = False);
 var
   secs: Double;
   state: string;
 begin
-  secs := (MTime - GStart) / 1000.0;
-  if code > 1 then state := '(with errors)'
-  else if code > 0 then state := '(with warnings)'
-  else state := '(all OK)';
-  WriteLn(StdErr, Format('%1.3f seconds %s', [secs, state]));
+  if not quiet then
+  begin
+    secs := (MTime - GStart) / 1000.0;
+    if code > 1 then state := '(with errors)'
+    else if code > 0 then state := '(with warnings)'
+    else state := '(all OK)';
+    WriteLn(StdErr, Format('%1.3f seconds %s', [secs, state]));
+  end;
   Halt(code);
+end;
+
+{ Print the usage text and exit like upstream's usage() (no timing line). }
+procedure Usage; forward;
+
+procedure UsageExit;
+begin
+  Usage;
+  Finish(1, True);
 end;
 
 type
@@ -87,29 +101,54 @@ begin
   Result.ctx := nil;
 end;
 
-procedure Usage;
+{ Current UTC date as YYYYMMDDHHMMSS, honouring the ZPAQII_NOW test hook. }
+function CurrentDate: Int64;
+var
+  v: string;
 begin
-  WriteLn(VERSION);
-  WriteLn('Usage: zpaqii command archive[.zpaq] files... -options...');
-  WriteLn('Commands: add, extract, list');
-  WriteLn('Options: -method/-m METHOD   compress level 0..5 or explicit method');
-  WriteLn('         -to DIR...          rename files... to dir... (or all to DIR)');
-  WriteLn('         -only files...      include only these prefixes');
-  WriteLn('         -not files...       exclude these prefixes');
-  WriteLn('         -key PASSWORD       create or access an encrypted archive');
-  WriteLn('         -fragment N         average fragment size 2^N KiB (default 6)');
-  WriteLn('         -index F            extract: write an index F for the archive');
-  WriteLn('                             add: append a part and update index F');
-  WriteLn('         -force/-f           add: re-add changed contents');
-  WriteLn('         -tN / -threads N    compression threads (0 = one per CPU)');
-  WriteLn('         -until N            roll back to the N-th update');
-  WriteLn('         -repack F [X]       extract to new archive F with key X (default: none)');
-  WriteLn('         -all [N]            extract/list versions in N [4] digit directories');
-  WriteLn('         -summary N          list: top N by size (-1: fragment ids)');
-  WriteLn('         -test               extract: verify but do not write files');
-  WriteLn('         -noattributes       ignore/don''t save attributes');
-  WriteLn('         Use * or ???? in the archive name for multi-part archives.');
+  v := GetEnvironmentVariable('ZPAQII_NOW');
+  if v <> '' then
+    Result := DecimalTime(StrToInt64(v))
+  else
+    Result := DecimalTime(DateTimeToUnix(Now, False));
 end;
+
+{ Upstream's usage() text, verbatim. }
+procedure Usage;
+var
+  nt: Integer;
+begin
+  WriteLn('Usage: zpaq command archive[.zpaq] files... -options...');
+  WriteLn('Files... may be directory trees. Default is the whole archive.');
+  WriteLn('Use * or ???? in archive name for multi-part or "" for empty.');
+  WriteLn('Commands:');
+  WriteLn('   a  add         Append files to archive if dates have changed.');
+  WriteLn('   x  extract     Extract most recent versions of files.');
+  WriteLn('   l  list        List or compare external files to archive by dates.');
+  WriteLn('Options:');
+  WriteLn('  -all [N]        Extract/list versions in N [4] digit directories.');
+  WriteLn('  -f -force       Add: append files if contents have changed.');
+  WriteLn('                  Extract: overwrite existing output files.');
+  WriteLn('                  List: compare file contents instead of dates.');
+  WriteLn('  -index F        Extract: create index F for archive.');
+  WriteLn('                  Add: create suffix for archive indexed by F, update F.');
+  WriteLn('  -key X          Create or access encrypted archive with password X.');
+  WriteLn('  -mN  -method N  Compress level N (0..5 = faster..better, default 1).');
+  WriteLn('  -noattributes   Ignore/don''t save file attributes or permissions.');
+  WriteLn('  -not files...   Exclude. * and ? match any string or char.');
+  WriteLn('       =[+-#^?]   List: exclude by comparison result.');
+  WriteLn('  -only files...  Include only matches (default: *).');
+  WriteLn('  -repack F [X]   Extract to new archive F with key X (default: none).');
+  WriteLn('  -sN -summary N  List: show top N sorted by size. -1: show frag IDs.');
+  WriteLn('                  Add/Extract: if N > 0 show brief progress.');
+  WriteLn('  -test           Extract: verify but do not write files.');
+  WriteLn('  -tN -threads N  Use N threads (default: 0 = ', GThreads, ' cores).');
+  WriteLn('  -to out...      Rename files... to out... or all to out/all.');
+  WriteLn('  -until N        Roll back archive to N''th update or -N from end.');
+  WriteLn('  -until ', DateToString(CurrentDate),
+          '  Set date, roll back (UT, default time: 235959).');
+end;
+
 
 { -key X: upstream uses SHA256(X) as the stretchKey password. }
 function KeyDigest(const text: string): string;
@@ -418,6 +457,7 @@ begin
         decompresser can resynchronise on garbage and invent segments that
         upstream never sees (it walks the scanned block list). }
       if (inArc.Tell() - zq_d_buffered(d)) >= j.lastOffset then Break;
+      try
       while True do
       begin
         GName := '';
@@ -456,11 +496,21 @@ begin
           end;
         end;
 
-        if zq_d_decompress(d, -1) < 0 then Fail(string(zq_last_error));
+        if zq_d_decompress(d, -1) < 0 then
+          raise Exception.Create(string(zq_last_error));
 
-        if zq_d_read_segment_end(d, nil) < 0 then Fail(string(zq_last_error));
+        if zq_d_read_segment_end(d, nil) < 0 then
+          raise Exception.Create(string(zq_last_error));
         if listOnly and j.IsSelected(string(GName), False) then
           WriteLn(GName);
+      end;
+      except
+        on e: Exception do
+        begin
+          { upstream catches per block and keeps going }
+          WriteLn('Skipping block: ', e.Message);
+          if fd <> nil then FreeAndNil(fd);
+        end;
       end;
     end;
   finally
@@ -569,7 +619,6 @@ var
   dateSet: Boolean;
   force: Boolean;
   frag: Integer;
-  nthreads: Integer;
   summary: Integer;
   dotest, noattrs: Boolean;
   allver: Integer;
@@ -584,14 +633,15 @@ begin
   WriteLn('zpaq v7.15 journaling archiver, compiled ', {$I %DATE%});
   if ParamCount < 1 then
   begin
-    Usage;
-    Finish(1);
+    GThreads := CPUCount;   { upstream resolves the thread count first }
+    UsageExit;
   end;
   cmd := ParamStr(1);
-  if (cmd = '-h') or (cmd = '--help') or (cmd = 'help') then
+  if (cmd <> '') and (cmd[1] = '-') then
   begin
-    Usage;
-    Finish(0);
+    { upstream parses argv[1] as an option, warns and prints the usage }
+    WriteLn('Unknown option ignored: ', cmd);
+    UsageExit;
   end;
 
   archive := '';
@@ -608,7 +658,7 @@ begin
   dateVal := 0;
   force := False;
   frag := 6;
-  nthreads := 0;
+  GThreads := 0;
   summary := 0;
   nottype := '';
   files := TStringList.Create;
@@ -641,11 +691,11 @@ begin
       end
       else if (Copy(a, 1, 2) = '-t') and (Length(a) > 2) and
               (a[3] >= '0') and (a[3] <= '9') then
-        nthreads := StrToIntDef(Copy(a, 3, MaxInt), 0)
+        GThreads := StrToIntDef(Copy(a, 3, MaxInt), 0)
       else if (a = '-threads') then
       begin
         Inc(i);
-        nthreads := StrToIntDef(ParamStr(i), 0);
+        GThreads := StrToIntDef(ParamStr(i), 0);
       end
       else if (a = '-to') then
       begin
@@ -737,12 +787,19 @@ begin
         dateVal := ParseUntil(ParamStr(i));
         dateSet := True;
       end
-      else if (a <> '') and (a[1] = '-') then
-        Fail('unknown option ' + a)
+      else if (a <> '') and (a[1] = '-') and (Length(a) > 1) then
+      begin
+        { upstream warns and then prints the usage, exiting with 1 }
+        WriteLn('Unknown option ignored: ', a);
+        UsageExit;
+      end
+      else if (a = '-') then
+      begin
+        UsageExit;
+      end
       else if optsStarted then
       begin
-        Usage;
-        Finish(1);
+        UsageExit;
       end
       else if not archiveSet then
       begin
@@ -756,9 +813,18 @@ begin
 
     if not archiveSet then
     begin
-      Usage;
-      Finish(1);
+      UsageExit;
     end;
+    { An unknown command is rejected during parsing, before the thread count is
+      resolved (upstream calls usage() from the argument loop). }
+    if (cmd <> 'add') and (cmd <> 'a') and (cmd <> 'extract') and
+       (cmd <> 'x') and (cmd <> 'list') and (cmd <> 'l') and
+       (cmd <> 'convert') and (cmd <> 'c') then
+    begin
+      UsageExit;
+    end;
+    { upstream resolves the thread count right after parsing }
+    if GThreads < 1 then GThreads := CPUCount;
     if not dateSet then
     begin
       a := GetEnvironmentVariable('ZPAQII_NOW');
@@ -775,7 +841,7 @@ begin
       files.CaseSensitive := True;
       files.Sort;
       if (method <> '') and (method[1] = 's') then
-        Finish(AddStreaming(archive, method, key, files, dateVal, nthreads,
+        Finish(AddStreaming(archive, method, key, files, dateVal, GThreads,
                             summary));
       if not dateSet then
       begin
@@ -791,7 +857,7 @@ begin
         jadd.fragment := frag;
         jadd.noattributes := noattrs;
         jadd.summary := summary;
-        jadd.threads := nthreads;
+        jadd.threads := GThreads;
         jadd.indexName := indexName;
         for i := 0 to files.Count - 1 do jadd.files.Add(files[i]);
         for i := 0 to tofiles.Count - 1 do jadd.tofiles.Add(tofiles[i]);
@@ -819,7 +885,7 @@ begin
         for i := 0 to notfiles.Count - 1 do jadd.notfiles.Add(notfiles[i]);
         jadd.nottype := nottype;
         jadd.indexName := indexName;
-        jadd.threads := nthreads;
+        jadd.threads := GThreads;
         jadd.summary := summary;
         jadd.dotest := dotest;
         jadd.noattributes := noattrs;
@@ -849,8 +915,7 @@ begin
     end
     else
     begin
-      Usage;
-      Finish(1);
+      UsageExit;
     end;
    except
     on e: Exception do
