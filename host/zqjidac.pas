@@ -1483,6 +1483,7 @@ begin
               blk := Default(TBlockInfo);
               blk.start := Cardinal(Length(ht));
               blk.offset := block_offset;
+              blk.usize := -1;   { streaming: uncompressed size unknown }
               SetLength(blocks, Length(blocks) + 1);
               blocks[High(blocks)] := blk;
             end;
@@ -2387,70 +2388,54 @@ function TJidac.Equal(dtr: TDT; const fn: string): Boolean;
 var
   fs: TFileStream;
   buf: array[0..65535] of AnsiChar;
-  k, nb, cur, ofsFrag: Integer;
+  k: Integer;
   frag: Cardinal;
-  offsetInBlock: Int64;
-  blockData: PAnsiChar;
-  osb: TZqBuf;
-  bad: Boolean;
-  n, chunk: Int64;
+  n, chunk, total: Int64;
+  sha: TZqSha1;
 begin
   Result := False;
-  { No file (or unreadable): not equal, as upstream's fopen() check. }
+  { upstream: a file that cannot be opened is simply not equal }
   if not FileExistsUTF8(fn) then Exit;
+  { fragment sizes and hashes must be known, and the size must match }
+  total := 0;
+  for k := 0 to High(dtr.ptr) do
+  begin
+    frag := dtr.ptr[k];
+    if (frag = 0) or (frag >= Cardinal(Length(ht))) or (ht[frag].usize < 0) then
+      Exit;
+    Inc(total, ht[frag].usize);
+  end;
   try
     fs := TFileStream.Create(fn, fmOpenRead or fmShareDenyNone);
   except
     Exit;
   end;
-  osb := zq_buf_new(1 shl 16);
-  cur := -1;
+  sha := nil;
   try
-    fs.Position := 0;
-    try
-      for k := 0 to High(dtr.ptr) do
+    if fs.Size <> total then Exit;
+    { compare the SHA-1 of every fragment with the one in the archive, which is
+      what upstream does: the stored bytes may be preprocessed (LZ77, E8E9) }
+    sha := zq_sha1_new;
+    for k := 0 to High(dtr.ptr) do
+    begin
+      frag := dtr.ptr[k];
+      zq_sha1_init(sha);
+      n := ht[frag].usize;
+      while n > 0 do
       begin
-        frag := dtr.ptr[k];
-        if (frag = 0) or (frag >= Cardinal(Length(ht))) then Exit;
-        nb := FindBlockFor(frag);
-        if nb < 0 then Exit;
-        if nb <> cur then
-        begin
-          if not LoadBlock(archive, password, nb, osb, bad) then Exit;
-          cur := nb;
-          ofsFrag := blocks[nb].start;
-          offsetInBlock := 0;
-        end
-        else if frag < Cardinal(ofsFrag) then
-        begin
-          ofsFrag := blocks[nb].start;
-          offsetInBlock := 0;
-        end;
-        while ofsFrag < Int64(frag) do
-        begin
-          Inc(offsetInBlock, ht[ofsFrag].usize);
-          Inc(ofsFrag);
-        end;
-        blockData := zq_buf_data(osb);
-        n := ht[frag].usize;
-        while n > 0 do
-        begin
-          if n > SizeOf(buf) then chunk := SizeOf(buf) else chunk := n;
-          if fs.Read(buf, LongInt(chunk)) <> chunk then Exit;
-          if not CompareMem(@buf[0], blockData + offsetInBlock, chunk) then Exit;
-          Inc(offsetInBlock, chunk);
-          Dec(n, chunk);
-        end;
+        if n > SizeOf(buf) then chunk := SizeOf(buf) else chunk := n;
+        if fs.Read(buf, LongInt(chunk)) <> chunk then Exit;
+        zq_sha1_write(sha, @buf[0], chunk);
+        Dec(n, chunk);
       end;
-      Result := fs.Read(buf, 1) = 0;
-    finally
-      fs.Free;
+      if not CompareMem(zq_sha1_result(sha), @ht[frag].sha1[0], 20) then Exit;
     end;
+    Result := True;
   finally
-    zq_buf_free(osb);
+    if sha <> nil then zq_sha1_free(sha);
+    fs.Free;
   end;
 end;
-
 { List archive contents, comparing with the file system when files... are
   given (upstream list).  Status: '-' internal, '+' external, '=' same,
   '#' different, '^' duplicate. }
@@ -2995,6 +2980,13 @@ begin
   else
     minFrag := Int64(64) shl fragment;
 
+  if indexName <> '' then
+  begin
+    if dcsize > 0 then
+      raise Exception.Create('index is a regular archive');
+    if version <> DEFAULT_VERSION then
+      raise Exception.Create('cannot truncate with an index');
+  end;
   for i := 0 to High(blocks) do
     if blocks[i].usize < 0 then
       raise Exception.Create('cannot update streaming archive in journaling format');

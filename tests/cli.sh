@@ -533,6 +533,26 @@ else
   bad "extract -force identical output (rc $ru/$rp)"
 fi
 
+# -force compares fragments by SHA-1, so it also works for preprocessed blocks
+# (E8E9/LZ77): an archive of binary data is "=" without re-extracting.
+rm -rf fx1 fx2
+mkdir fx1 fx2
+FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add fbase.zpaq d/sub/b.bin d/a.txt -m1 -t1 \
+  >/dev/null 2>&1
+"$Z" extract fbase.zpaq -to fx1 -t1 >/dev/null 2>&1
+"$P" extract fbase.zpaq -to fx2 -t1 >/dev/null 2>&1
+"$Z" extract fbase.zpaq -to fx1 -force -t1 >eu.log 2>&1
+ru=$?
+"$P" extract fbase.zpaq -to fx2 -force -t1 >ep.log 2>&1
+rp=$?
+if [ "$ru" = "$rp" ] &&
+   diff <(norm2 <eu.log | sed 's/fx1/fxX/g') \
+        <(norm2 <ep.log | sed 's/fx2/fxX/g') >/dev/null 2>&1; then
+  ok
+else
+  bad "extract -force with preprocessed blocks"
+fi
+
 # extract -only / -not: selection and output
 rm -rf eo1 eo2
 mkdir eo1 eo2
@@ -588,6 +608,33 @@ if diff <("$Z" list base.zpaq -s2 -t1 2>&1 | norm) \
 else
   bad "list -s2 duplicates"
 fi
+
+# ---- add/extract error paths (same message and exit code) ----
+rm -f st.zpaq j.zpaq
+FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add st.zpaq d/a.txt -method s1.0 -t1 >/dev/null 2>&1
+FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add j.zpaq d/a.txt -m1 -t1 >/dev/null 2>&1
+errcmp() {  # tag, args...
+  local tag=$1
+  shift
+  rm -rf e1 e2
+  mkdir e1 e2
+  (cd e1 && cp -p ../d/a.txt . 2>/dev/null; "$Z" "$@" >log 2>err)
+  ru=$?
+  (cd e2 && cp -p ../d/a.txt . 2>/dev/null; "$P" "$@" >log 2>err)
+  rp=$?
+  if [ "$ru" = "$rp" ] &&
+     diff <(norm2 <e1/log) <(norm2 <e2/log) >/dev/null 2>&1 &&
+     diff <(norm2 <e1/err) <(norm2 <e2/err) >/dev/null 2>&1; then
+    ok
+  else
+    bad "error path $tag (rc $ru/$rp)"
+  fi
+}
+errcmp "-index with -method s" add a.zpaq a.txt -method s1.0 -index x.idx
+errcmp "journaling add on a streaming archive" add st.zpaq a.txt -m1
+errcmp "streaming add on a journaling archive" add j.zpaq a.txt -method s1.0
+errcmp "add with -until N" add base.zpaq a.txt -until 1
+errcmp "-until with an index" add base.zpaq a.txt -until 1 -index x.idx
 
 # ---- add: selection and -to rename ----
 rm -rf su sp

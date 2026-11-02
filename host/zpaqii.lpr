@@ -247,7 +247,7 @@ end;
 
 function AddStreaming(const archive, method, key: string;
                       files: TStringList; trDate: Int64;
-                      nthreads, sum: Integer): Integer;
+                      nthreads, sum: Integer; const indexName: string): Integer;
 var
   out: TOutputArchive;
   salt: array[0..31] of AnsiChar;
@@ -269,8 +269,10 @@ var
   order: array of Integer;
   keys: array of Int64;
   tmpIdx, si, sj: Integer;
+  mixed: Boolean;
 begin
   headerPos := 0;
+  mixed := False;
   totalSize := 0;
   totalDone := 0;
   nt := nthreads;
@@ -292,6 +294,9 @@ begin
     try
       for i := 0 to files.Count - 1 do reader.files.Add(files[i]);
       headerPos := reader.ReadArchive(errs, nfiles);
+      { a journaling archive cannot be updated in streaming format }
+      for i := 0 to High(reader.blocks) do
+        if reader.blocks[i].usize >= 0 then mixed := True;
     finally
       reader.Free;
     end;
@@ -301,6 +306,10 @@ begin
     Write('Creating ');
   Write(archive, ' at offset ', Format('%1.0f', [headerPos + 0.0]), ' + 0');
   WriteLn;
+  if indexName <> '' then
+    raise Exception.Create('cannot index in streaming mode');
+  if mixed then
+    raise Exception.Create('cannot update journaling archive in streaming format');
 
   for i := 0 to files.Count - 1 do
   begin
@@ -842,7 +851,7 @@ begin
       files.Sort;
       if (method <> '') and (method[1] = 's') then
         Finish(AddStreaming(archive, method, key, files, dateVal, GThreads,
-                            summary));
+                            summary, indexName));
       if not dateSet then
       begin
         { testing hook: ZPAQII_NOW freezes the clock (unix seconds) }
@@ -853,7 +862,7 @@ begin
           dateVal := DecimalTime(DateTimeToUnix(Now, False));
       end;
       begin
-        jadd := TJidac.Create(archive, key, DEFAULT_VERSION);
+        jadd := TJidac.Create(archive, key, untilVer);
         jadd.fragment := frag;
         jadd.noattributes := noattrs;
         jadd.summary := summary;

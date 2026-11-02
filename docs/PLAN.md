@@ -708,3 +708,25 @@ Both commands now report I/O failures per file and keep going, like upstream:
 
 `tests/cli.sh` compares the full output (and exit code) of: no arguments, `-h`,
 `help`, an unknown option, an unknown command (103 checks).
+
+## E22h: format mixing, add -until, -force by content
+
+* `add -until N` now rolls the archive back: the scan uses that version, the
+  banner says `-until N`, the new transaction is written at that offset and the
+  archive is truncated.  Before, the port ignored `-until` for `add` (and for
+  its scan).
+* Mixing formats is rejected like upstream: `-method s` on a journaling archive
+  and `-method 0..5` on a streaming one print `cannot update ... in streaming
+  format` / `... in journaling format` and exit 2.  The port models streaming
+  blocks with `usize = -1` (as upstream) so the check works both ways.
+* `-index` with `-method s` prints `Creating ...` first and then
+  `cannot index in streaming mode`, like upstream's `add()`.
+* `add -index` on a regular archive and `-until` with `-index` are rejected
+  (`index is a regular archive`, `cannot truncate with an index`).
+* `equal()` compares each fragment's SHA-1 with the archive's instead of
+  decompressing the block, which is what upstream does — the old version
+  reported every file as different when the block had been preprocessed
+  (LZ77/E8E9), so `list -force` and `extract -force` re-extracted them.
+
+`tests/cli.sh` covers the error paths and `-force` over a preprocessed archive
+(109 checks).
