@@ -1,0 +1,236 @@
+// Oráculo E2: para cada config ZPAQL genera un manifiesto (config + args) y
+// vuelca el bytecode compilado y la traza de ejecución (H[], salida).
+// Uso: e2_oracle <manifest.txt> <resultados.txt>
+#include "libzpaq.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <string>
+#include <vector>
+
+namespace libzpaq {
+std::string makeConfig(const char *method, int args[]);
+}
+
+void libzpaq::error(const char *msg) {
+  fprintf(stderr, "oracle error: %s\n", msg);
+  exit(1);
+}
+
+struct MemWriter : public libzpaq::Writer {
+  std::string s;
+  void put(int c) { s += char(c); }
+  void write(const char *p, int n) { s.append(p, n); }
+};
+
+struct Case {
+  std::string config;
+  int args[9];
+  bool hp;  // incluye PCOMP
+};
+
+static void hex(const char *p, int n, std::string &out) {
+  static const char *d = "0123456789abcdef";
+  for (int i = 0; i < n; ++i) {
+    out += d[(unsigned char)p[i] >> 4];
+    out += d[(unsigned char)p[i] & 15];
+  }
+}
+
+static std::string sha1str(libzpaq::SHA1 &s) {
+  char h[20];
+  memcpy(h, s.result(), 20);
+  std::string out;
+  hex(h, 20, out);
+  return out;
+}
+
+static unsigned lcg = 123456789u;
+static unsigned nextrand() {
+  lcg = lcg * 1103515245u + 12345u;
+  return lcg >> 8;
+}
+
+static std::string escape(const std::string &s) {
+  std::string o;
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == '\\') o += "\\\\";
+    else if (s[i] == '\n') o += "\\n";
+    else o += s[i];
+  }
+  return o;
+}
+
+int main(int argc, char **argv) {
+  if (argc < 3) {
+    fprintf(stderr, "uso: e2_oracle <manifest> <resultados>\n");
+    return 2;
+  }
+  FILE *mf = fopen(argv[1], "w");
+  FILE *rf = fopen(argv[2], "w");
+  if (!mf || !rf) {
+    fprintf(stderr, "no puedo abrir archivos\n");
+    return 2;
+  }
+
+  std::vector<Case> cases;
+
+  // Configs generadas por makeConfig para metodos reales.
+  static const char *methods[] = {
+      "x1.0",  "x1.1",  "x1.2",  "x1.3",  "x1.4",  "x1.5",  "x1.6",
+      "x1.7",  "x4.1.5.0.3.22", "x4.2.12,0,7,25,1", "x4.3ci1",
+      "x4.0ci1", "x4.0c256ci1,1,1,1,1,1,2a", "x4.0ci1,1,1,1,2awm",
+      "x4.0t0", "x4.0s8", "x4.0cm16", "x4.0icm16", "x4.0a24",
+      "x4.0m8", "x4.0c0,0,511i2", "x4.0w2c0,1010,255i1",
+      "x4.3ci1mm8ts8t0", "x4.0c0,0,999+7,255i1", 0};
+  for (int i = 0; methods[i]; ++i) {
+    Case c;
+    memset(c.args, 0, sizeof(c.args));
+    c.config = libzpaq::makeConfig(methods[i], c.args);
+    c.hp = c.config.find("pcomp") != std::string::npos;
+    cases.push_back(c);
+  }
+
+  // Config sintetica que recorre todo el repertorio de opcodes.
+  {
+    std::string p =
+        "comp 9 16 0 0 0 hcomp\n"
+        "a= 1 a++ a-- a! a=0\n"
+        "b= 2 b++ b-- b! b=0 b= 3 a= 4 b<>a\n"
+        "c= 5 c++ c-- c! c=0 c= 6 a= 7 c<>a\n"
+        "d= 8 d++ d-- d! d=0 d= 9 a= 10 d<>a\n"
+        "b= 3 *b= 11 a=*b *b<>a *b++ *b-- *b! *b=0\n"
+        "c= 4 *c= 12 a=*c *c<>a *c++ *c-- *c! *c=0\n"
+        "d= 5 *d= 13 a=*d *d<>a *d++ *d-- *d! *d=0\n"
+        "a= 255 r= 7 a=r 7\n"
+        "a= 1 b= 2 a+=b a+=*b a+= 3 a-=b a-=*b a-= 2\n"
+        "a*=b a*=*b a*= 3 a/=b a/=*b a/= 2\n"
+        "a%=b a%=*b a%= 7 a&=b a&=*b a&= 127\n"
+        "a&~b a&~*b a&~ 3 a|=b a|=*b a|= 64\n"
+        "a^=b a^=*b a^= 15 a<<=b a<<=*b a<<= 3\n"
+        "a>>=b a>>=*b a>>= 2\n"
+        "a= 3 b= 3 a==b if a= 1 else a= 2 endif\n"
+        "a= 3 b= 4 a==b ifnot a= 3 endif\n"
+        "a= 1 b= 2 a<b if a= 9 endif a>b if a= 8 endif\n"
+        "a= 5 a== 5 if a==*b if a> 4 if a= 77 endif endif endif\n"
+        "a= 1 b= 0 do a++ b++ a==b until\n"
+        "a= 0 b= 0 do b++ a++ a== 3 while\n"
+        "a= 0 b= 0 do b++ a++ a== 4 forever\n"
+        "b= 0 c= 0 d= 0 a= 42 hash a= 42 hashd\n"
+        "a= 0 b= 1 a=*b hash a=*b hashd\n"
+        "a= 3 ifl a= 1 elsel a= 2 endif\n"
+        "a= 0 ifnotl a= 5 elsel a= 6 endif\n"
+        "d= 0 *d=a d= 1 *d=b d= 2 *d=c d= 3 *d=d d= 4 *d= 99\n"
+        "a= 1 b= 2 c= 3 d= 4 a= 0\n"
+        "end\n";
+    Case c;
+    memset(c.args, 0, sizeof(c.args));
+    c.config = p;
+    c.hp = false;
+    cases.push_back(c);
+  }
+
+  // Config con PCOMP sintetico (out, saltos y salida).
+  {
+    std::string p =
+        "comp 9 16 9 16 0 hcomp a= 1 end\n"
+        "pcomp test ;\n"
+        "a= 0 b= 0 c= 0 d= 0\n"
+        "a=*b out b++ a=*b out b++ a=*b out b++\n"
+        "a> 128 if a= 1 else a= 2 endif out\n"
+        "a= 1 b= 0 do b++ a<<= 1 a> 200 until\n"
+        "a+= 65 out a+= 66 out\n"
+        "d= 0 h(d)= 1234 a=*d out\n"
+        "halt\n"
+        "end\n";
+    Case c;
+    memset(c.args, 0, sizeof(c.args));
+    c.config = p;
+    c.hp = true;
+    cases.push_back(c);
+  }
+
+  // Manifiesto + resultados
+  for (size_t i = 0; i < cases.size(); ++i) {
+    fprintf(mf, "CASE %zu %d\n", i, cases[i].hp ? 1 : 0);
+    fprintf(mf, "CONFIG %s\n", escape(cases[i].config).c_str());
+    fprintf(mf, "ARGS");
+    for (int j = 0; j < 9; ++j) fprintf(mf, " %d", cases[i].args[j]);
+    fprintf(mf, "\n");
+
+    libzpaq::ZPAQL hz, pz;
+    MemWriter pcmd;
+    libzpaq::Compiler(cases[i].config.c_str(), cases[i].args, hz, pz, &pcmd);
+
+    fprintf(rf, "RESULT %zu\n", i);
+
+    // Bytecode COMP+HCOMP
+    {
+      MemWriter w;
+      bool has = hz.write(&w, false);
+      fprintf(rf, "BCH %d ", has ? 1 : 0);
+      std::string h;
+      hex(w.s.data(), (int)w.s.size(), h);
+      fprintf(rf, "%s\n", h.c_str());
+      fprintf(rf, "BCHSIZE %d %d %d %d\n", hz.cend, hz.hbegin, hz.hend,
+              (int)hz.header.size());
+    }
+    // Bytecode PCOMP y comando
+    {
+      MemWriter w;
+      bool has = pz.write(&w, true);
+      fprintf(rf, "BCP %d ", has ? 1 : 0);
+      std::string h;
+      hex(w.s.data(), (int)w.s.size(), h);
+      fprintf(rf, "%s\n", h.c_str());
+      std::string ph;
+      hex(pcmd.s.data(), (int)pcmd.s.size(), ph);
+      fprintf(rf, "PCMD %s\n", ph.c_str());
+    }
+
+    // Ejecucion HCOMP
+    lcg = 123456789u;
+    if (hz.hend > hz.hbegin) {
+      hz.inith();
+      for (int k = 0; k < 200; ++k) {
+        unsigned v = nextrand();
+        hz.run(v);
+        if (k < 8 || k % 50 == 49) {
+          libzpaq::SHA1 h;
+          int nb = 1 << hz.header[2];
+          if (nb > 256) nb = 256;
+          for (int j = 0; j < nb; ++j) {
+            unsigned x = hz.H(j);
+            char b[4];
+            b[0] = char(x >> 24);
+            b[1] = char(x >> 16);
+            b[2] = char(x >> 8);
+            b[3] = char(x);
+            h.write(b, 4);
+          }
+          fprintf(rf, "H %d %s\n", k + 1, sha1str(h).c_str());
+        }
+      }
+    }
+
+    // Ejecucion PCOMP
+    lcg = 987654321u;
+    if (pz.hend > pz.hbegin) {
+      MemWriter out;
+      pz.output = &out;
+      pz.initp();
+      for (int k = 0; k < 400; ++k) pz.run((unsigned)(nextrand() & 255));
+      pz.run((unsigned)-1);
+      pz.flush();
+      libzpaq::SHA1 h;
+      h.write(out.s.data(), (int)out.s.size());
+      fprintf(rf, "POUT %d %s\n", (int)out.s.size(), sha1str(h).c_str());
+    }
+  }
+
+  fclose(mf);
+  fclose(rf);
+  return 0;
+}
