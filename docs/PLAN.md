@@ -188,6 +188,11 @@ let the oracle (upstream) validate each piece as early as possible.
   for CI (never for release binaries).
 - **Acceptance:** 100 % green matrix, no warnings with `-Wall -Wextra`,
   valgrind/ASan clean when decoding the corpus.
+- **Status (fuzzing):** `tests/fuzz.py` mutates valid streaming and journaling
+  archives (truncation, bit flips, zeroed spans, appended junk) and compares the
+  port with upstream on `list` (file sets) and `extract` (success and file set).
+  204 cases: no crashes, no list differences. Exit-code differences on corrupt
+  archives are tracked as divergences in `docs/DEVIATIONS.md`.
 
 ---
 

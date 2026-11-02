@@ -245,7 +245,7 @@ begin
 end;
 
 function RunExtract(const archive, toDir, key: string; listOnly, force: Boolean;
-                    untilVer: Int64): Integer;
+                    untilVer, dateVal: Int64): Integer;
 var
   j: TJidac;
   errors: Integer;
@@ -254,21 +254,21 @@ var
 begin
   ver := untilVer;
   j := TJidac.Create(archive, key, ver);
+  j.cmdDate := dateVal;
   try
     j.ReadArchive(errors, nfiles);
-    if j.isJidac then
+    if listOnly then
     begin
-      if listOnly then
-      begin
-        j.List;
-        Result := 0;
-      end
-      else
-        Result := j.Extract(toDir, force);
+      j.List;             { tolerant: works for streaming and journaling }
+      Result := 0;        { upstream list() always returns 0 }
+    end
+    else if j.isJidac then
+    begin
+      Result := j.Extract(toDir, force);
+      if errors <> 0 then Result := 1;
     end
     else
-      Result := ExtractStreaming(archive, toDir, listOnly);
-    if errors <> 0 then Inc(Result, errors);
+      Result := ExtractStreaming(archive, toDir, False);
   finally
     j.Free;
   end;
@@ -373,6 +373,12 @@ begin
     end;
 
     if archive = '' then Fail('missing archive name');
+    if not dateSet then
+    begin
+      a := GetEnvironmentVariable('ZPAQII_NOW');
+      if a <> '' then dateVal := DecimalTime(StrToInt64(a))
+      else dateVal := DecimalTime(DateTimeToUnix(Now));
+    end;
     if ExtractFileExt(archive) = '' then archive := archive + '.zpaq';
 
     if cmd = 'add' then
@@ -405,9 +411,9 @@ begin
       end;
     end
     else if (cmd = 'extract') or (cmd = 'x') then
-      Halt(RunExtract(archive, toDir, key, False, force, untilVer))
+      Halt(RunExtract(archive, toDir, key, False, force, untilVer, dateVal))
     else if (cmd = 'list') or (cmd = 'l') then
-      Halt(RunExtract(archive, toDir, key, True, force, untilVer))
+      Halt(RunExtract(archive, toDir, key, True, force, untilVer, dateVal))
     else
     begin
       Usage;

@@ -52,13 +52,14 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h
 
 # ---------------- tests ----------------
 
-test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5
+test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a
 	@echo "== E1 (hash/AES/scrypt): OK =="
 	@echo "== E2 (ZPAQL VM + compiler): OK =="
 	@echo "== E3 (predictor + coder): OK =="
 	@echo "== E4 (container + extraction): OK =="
 	@echo "== E4b (bit-exact block compression): OK =="
 	@echo "== E5 (Pascal host: streaming + journaling add/extract): OK =="
+	@echo "== E6a (differential fuzzing): OK =="
 
 test-e1: $(BUILD)/vectors_e1 $(BUILD)/e1_oracle
 	@$(BUILD)/vectors_e1 > $(BUILD)/e1_core.txt
@@ -145,6 +146,9 @@ $(BUILD)/zpaqii: $(HOST_SRC) $(BUILD)/libzqcore.a
 	  -Fl$(CURDIR)/$(BUILD) -k-lzqcore -k-lc host/zpaqii.lpr -o$@
 
 host: $(BUILD)/zpaqii
+
+test-e6a: $(BUILD)/zpaqii
+	@python3 tests/fuzz.py $(UPSTREAM)/zpaq $(BUILD)/zpaqii $(BUILD)/fuzzwork 60
 
 ifeq ($(DEBUG),1)
 # The ASan/UBSan core cannot be linked into the FPC binary (sanitizer runtime

@@ -73,6 +73,7 @@ type
     archive: string;
     password: string;
     version: Int64;
+    cmdDate: Int64;   { update date for streaming entries }
     ht: array of THT;
     blocks: array of TBlockInfo;
     ver: array of TVer;
@@ -159,6 +160,7 @@ begin
   archive := arc;
   password := pass;
   version := ver_;
+  cmdDate := 0;
   SetLength(ht, 1);   { element 0 is not used, like upstream }
   FillChar(ht[0], SizeOf(THT), 0);
   SetLength(blocks, 0);
@@ -649,7 +651,7 @@ begin
             if (Length(fnameSink.s) > 0) or first then
             begin
               Inc(filesSeen);
-              dtr.date := version;
+              dtr.date := cmdDate;
               dtr.attr := 0;
               SetLength(dtr.ptr, 0);
               Inc(ver[High(ver)].updates);
