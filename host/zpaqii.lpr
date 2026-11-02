@@ -564,6 +564,7 @@ begin
         for i := 0 to notfiles.Count - 1 do jadd.notfiles.Add(notfiles[i]);
         jadd.nottype := nottype;
         jadd.indexName := indexName;
+        jadd.threads := nthreads;
         if jadd.version < 0 then
         begin
           { -until -N: count from the end, like upstream }

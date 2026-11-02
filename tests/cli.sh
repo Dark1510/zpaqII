@@ -191,6 +191,27 @@ mkdir xu xo
   "$P" extract so.zpaq -to xo -key pw >/dev/null 2>&1 &&
   diff -r xu xo >/dev/null 2>&1 && ok || bad "streaming -key extract"
 
+# ---- extraction threads: same files for any thread count ----
+rm -rf dt
+mkdir dt
+cd dt || exit 1
+head -c 6000000 /dev/urandom > r.bin
+yes "extraction threads 0123456789" | head -c 6000000 > t.txt
+ZPAQII_NOW=$NOW "$P" add e.zpaq r.bin t.txt -method x1.1.5.0.3.22 -t1 >/dev/null 2>&1
+for t in 1 2 4 8; do
+  rm -rf "o$t"
+  mkdir "o$t"
+  "$P" extract e.zpaq -to "o$t" -t"$t" >/dev/null 2>&1
+done
+if diff -r o1 o2 >/dev/null 2>&1 && diff -r o1 o4 >/dev/null 2>&1 &&
+   diff -r o1 o8 >/dev/null 2>&1 && cmp -s r.bin o1/r.bin; then
+  ok
+else
+  bad "extraction: -t1/-t2/-t4/-t8 differ"
+fi
+cd ..
+cd ..
+
 # ---- -index: create an index from an archive (extract -index F) ----
 rm -rf ix
 mkdir ix
@@ -288,5 +309,5 @@ if [ $fails -ne 0 ]; then
   exit 1
 fi
 echo "not covered yet (known gaps):"
-echo "  parallel extraction, list comparison against the file system"
+echo "  list comparison against the file system"
 echo "  (=same / #different / +external, -summary, -test, -repack)"

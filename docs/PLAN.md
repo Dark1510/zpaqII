@@ -372,3 +372,26 @@ Speed (60 MB, byte-LZ77 with 16 MB blocks): 2.03 s at `-t1`, 1.37 s at `-t8`.
 Parallelism is bounded by the main thread (~20 ms/MB) and by how many blocks the
 data produces: `-m5` uses blocks of up to 64 MiB, so a 20 MB input is a single
 block in upstream too and cannot be parallelised.
+
+## E9: parallel extraction (done)
+
+`-tN` also applies to extraction.  `TDecPool` (host/zqjidac.pas) decompresses,
+ahead of time and in ascending order, every block that a selected file needs:
+
+* a ring of N+1 slots, each with its own decompressed buffer and event;
+* workers take the next block from the ascending list; the main thread waits
+  for the block it needs, and pins that slot so it cannot be recycled while it
+  is being written out;
+* a block requested out of the prefetch window is decompressed synchronously
+  into a fallback buffer (correct, just slower);
+* the fragment offset inside a block is now a running prefix sum instead of a
+  scan from the block start (was O(fragments²) per block).
+
+Bug found here: `Get()` first returned the `zq_buf` handle instead of the data
+pointer, so the writer read the 48-byte buffer header as block data.  The
+symptoms were memory corruption (`realloc(): invalid old size`) and truncated
+output only on archives with several blocks.
+
+Measured on a 60 MB archive with 16 MB blocks: extract 0.75 s at `-t1`,
+0.33 s at `-t8`.  `tests/cli.sh` checks that `-t1/-t2/-t4/-t8` extract identical
+trees.

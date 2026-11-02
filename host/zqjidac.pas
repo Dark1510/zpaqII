@@ -139,6 +139,51 @@ type
     errmsg: string;
   end;
 
+  { ---- Parallel block decompression (upstream ExtractJob) -------------
+    Blocks that a selected file needs are decompressed ahead of time, in
+    ascending order, into a small ring of slot buffers. }
+
+  TDecSlot = class
+  public
+    nb: Integer;              { block number, -1 = free }
+    buf: TZqBuf;
+    ok, bad, done, pinned: Boolean;
+    ev: TEvent;
+  end;
+
+  TDecPool = class;
+
+  TDecWorker = class(TThread)
+  private
+    fPool: TDecPool;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(p: TDecPool);
+  end;
+
+  TDecPool = class
+  private
+    fOwner: TJidac;
+    fSlots: array of TDecSlot;
+    fWorkers: array of TDecWorker;
+    fNeeded: array of Integer;
+    fNext: Integer;           { next index in fNeeded to prefetch }
+    fStop: Integer;
+    fSync: TZqBuf;            { out-of-order fallback }
+    fLock: TCriticalSection;
+    fCurrent: Integer;        { slot the main thread is reading, -1 = none }
+    function Find(nb: Integer): TDecSlot;
+    function FindIdx(nb: Integer): Integer;
+    function TakeWork(var nb: Integer): TDecSlot;
+  public
+    constructor Create(owner: TJidac; const needed: array of Integer;
+                       nthreads: Integer);
+    destructor Destroy; override;
+    procedure Start;
+    function Get(nb: Integer; out bad: Boolean): PAnsiChar;
+  end;
+
   TCompPool = class;
 
   TCompWorker = class(TThread)
@@ -425,6 +470,201 @@ begin
 end;
 
 
+
+{ ---- parallel block decompression ---------------------------------- }
+
+constructor TDecWorker.Create(p: TDecPool);
+begin
+  inherited Create(True);
+  FreeOnTerminate := False;
+  fPool := p;
+end;
+
+procedure TDecWorker.Execute;
+var
+  nb: Integer;
+  s: TDecSlot;
+  ok, bad: Boolean;
+begin
+  while True do
+  begin
+    s := fPool.TakeWork(nb);
+    if fPool.fStop <> 0 then Exit;
+    if s = nil then
+    begin
+      Sleep(1);                 { window full; retry }
+      Continue;
+    end;
+    bad := False;
+    ok := fPool.fOwner.LoadBlock(fPool.fOwner.archive, fPool.fOwner.password,
+                                 nb, s.buf, bad);
+    fPool.fLock.Acquire;
+    try
+      s.ok := ok;
+      s.bad := bad;
+      s.done := True;
+    finally
+      fPool.fLock.Release;
+    end;
+    s.ev.SetEvent;
+  end;
+end;
+
+constructor TDecPool.Create(owner: TJidac; const needed: array of Integer;
+                            nthreads: Integer);
+var
+  i: Integer;
+begin
+  inherited Create;
+  fOwner := owner;
+  SetLength(fNeeded, Length(needed));
+  for i := 0 to High(needed) do fNeeded[i] := needed[i];
+  fNext := 0;
+  fStop := 0;
+  fCurrent := -1;
+  fSync := zq_buf_new(1 shl 16);
+  fLock := TCriticalSection.Create;
+  if nthreads < 1 then nthreads := 1;
+  SetLength(fSlots, nthreads + 1);
+  for i := 0 to High(fSlots) do
+  begin
+    fSlots[i] := TDecSlot.Create;
+    fSlots[i].nb := -1;
+    fSlots[i].buf := zq_buf_new(1 shl 16);
+    fSlots[i].done := False;
+    fSlots[i].pinned := False;
+    fSlots[i].ev := TEvent.Create(nil, False, False, '');
+  end;
+  SetLength(fWorkers, nthreads);
+  for i := 0 to nthreads - 1 do fWorkers[i] := TDecWorker.Create(Self);
+end;
+
+destructor TDecPool.Destroy;
+var
+  i: Integer;
+begin
+  fStop := 1;
+  for i := 0 to High(fWorkers) do
+  begin
+    fWorkers[i].WaitFor;
+    fWorkers[i].Free;
+  end;
+  for i := 0 to High(fSlots) do
+  begin
+    zq_buf_free(fSlots[i].buf);
+    fSlots[i].ev.Free;
+    fSlots[i].Free;
+  end;
+  zq_buf_free(fSync);
+  fLock.Free;
+  inherited Destroy;
+end;
+
+procedure TDecPool.Start;
+var
+  i: Integer;
+begin
+  for i := 0 to High(fWorkers) do fWorkers[i].Start;
+end;
+
+function TDecPool.Find(nb: Integer): TDecSlot;
+var
+  i: Integer;
+begin
+  Result := nil;
+  for i := 0 to High(fSlots) do
+    if fSlots[i].nb = nb then Exit(fSlots[i]);
+end;
+
+function TDecPool.FindIdx(nb: Integer): Integer;
+var
+  i: Integer;
+begin
+  Result := -1;
+  for i := 0 to High(fSlots) do
+    if fSlots[i].nb = nb then Exit(i);
+end;
+
+{ Reserve a slot for the next block to prefetch, evicting the lowest numbered
+  finished block if the ring is full.  Called by workers. }
+function TDecPool.TakeWork(var nb: Integer): TDecSlot;
+var
+  i, best: Integer;
+begin
+  Result := nil;
+  nb := -1;
+  fLock.Acquire;
+  try
+    if (fStop <> 0) or (fNext >= Length(fNeeded)) then Exit;
+    best := -1;
+    for i := 0 to High(fSlots) do
+    begin
+      if fSlots[i].pinned then Continue;
+      if fSlots[i].nb < 0 then
+      begin
+        best := i;
+        Break;
+      end;
+      if fSlots[i].done and ((best < 0) or (fSlots[i].nb < fSlots[best].nb)) then
+        best := i;
+    end;
+    if best < 0 then Exit;            { all busy: caller retries }
+    nb := fNeeded[fNext];
+    Inc(fNext);
+    Result := fSlots[best];
+    Result.nb := nb;
+    Result.done := False;
+    Result.ok := False;
+    Result.bad := False;
+    Result.ev.ResetEvent;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TDecPool.Get(nb: Integer; out bad: Boolean): PAnsiChar;
+var
+  s: TDecSlot;
+  found: Boolean;
+begin
+  bad := False;
+  while True do
+  begin
+    fLock.Acquire;
+    try
+      if fCurrent >= 0 then
+      begin
+        fSlots[fCurrent].pinned := False;
+        fCurrent := -1;
+      end;
+      s := Find(nb);
+      found := s <> nil;
+      if found and s.done then
+      begin
+        s.pinned := True;
+        fCurrent := FindIdx(nb);
+      end;
+    finally
+      fLock.Release;
+    end;
+    if not found then
+    begin
+      { Not in the prefetch window: decompress it here. }
+      zq_buf_resize(fSync, 0);
+      if not fOwner.LoadBlock(fOwner.archive, fOwner.password, nb, fSync, bad)
+      then
+        Exit(nil);
+      Exit(zq_buf_data(fSync));
+    end;
+    if s.done then
+    begin
+      bad := s.bad;
+      if not s.ok then Exit(nil);
+      Exit(zq_buf_data(s.buf));
+    end;
+    s.ev.WaitFor(INFINITE);
+  end;
+end;
 
 function BToI(var s: PAnsiChar): Cardinal;
 begin
@@ -1402,10 +1642,11 @@ end;
 
 function TJidac.Extract(force: Boolean): Integer;
 var
-  i, nb, k: Integer;
+  i, nb, k, nt: Integer;
   dtr: TDT;
   frag: Cardinal;
   offsetInBlock, j: Int64;
+  ofsFrag: Integer;
   outPath: string;
   fo: TFileStream;
   blockData: PAnsiChar;
@@ -1413,12 +1654,46 @@ var
   osb: TZqBuf;
   bad: Boolean;
   errors: Integer;
+  needed: array of Integer;
+  needFlags: array of Boolean;
+  pool: TDecPool;
 begin
   Result := 0;
   errors := 0;
   curBlock := -1;
   osb := zq_buf_new(1 shl 16);
+  pool := nil;
   try
+    { Blocks that a selected file needs, ascending, for the prefetcher. }
+    nt := threads;
+    if nt < 1 then nt := CPUCount;
+    if (nt > 1) and (Length(blocks) > 1) then
+    begin
+      SetLength(needFlags, Length(blocks));
+      for i := 0 to dt.Count - 1 do
+      begin
+        dtr := TDT(dt.Objects[i]);
+        if dtr.date = 0 then Continue;
+        if not IsSelected(dt[i], False) then Continue;
+        for k := 0 to High(dtr.ptr) do
+        begin
+          nb := FindBlockFor(dtr.ptr[k]);
+          if (nb >= 0) and (not needFlags[nb]) then needFlags[nb] := True;
+        end;
+      end;
+      SetLength(needed, 0);
+      for i := 0 to High(needFlags) do
+        if needFlags[i] then
+        begin
+          SetLength(needed, Length(needed) + 1);
+          needed[High(needed)] := i;
+        end;
+      if Length(needed) > 1 then
+      begin
+        pool := TDecPool.Create(Self, needed, nt);
+        pool.Start;
+      end;
+    end;
     for i := 0 to dt.Count - 1 do
     begin
       dtr := TDT(dt.Objects[i]);
@@ -1447,12 +1722,27 @@ begin
           end;
           if nb <> curBlock then
           begin
-            if not LoadBlock(archive, password, nb, osb, bad) then
+            if pool <> nil then
             begin
-              WriteLn(StdErr, 'cannot decompress block ', nb);
-              Inc(errors);
-              curBlock := -1;
-              Continue;
+              blockData := pool.Get(nb, bad);
+              if blockData = nil then
+              begin
+                WriteLn(StdErr, 'cannot decompress block ', nb);
+                Inc(errors);
+                curBlock := -1;
+                Continue;
+              end;
+            end
+            else
+            begin
+              if not LoadBlock(archive, password, nb, osb, bad) then
+              begin
+                WriteLn(StdErr, 'cannot decompress block ', nb);
+                Inc(errors);
+                curBlock := -1;
+                Continue;
+              end;
+              blockData := zq_buf_data(osb);
             end;
             if bad then
             begin
@@ -1460,11 +1750,25 @@ begin
               Inc(errors);
             end;
             curBlock := nb;
+            ofsFrag := blocks[nb].start;
+            offsetInBlock := 0;
+          end
+          else if frag < Cardinal(ofsFrag) then
+          begin
+            ofsFrag := blocks[nb].start;
+            offsetInBlock := 0;
           end;
-          offsetInBlock := 0;
-          for j := Int64(blocks[nb].start) to Int64(frag) - 1 do
-            Inc(offsetInBlock, ht[j].usize);
-          blockData := zq_buf_data(osb);
+          { Running prefix sum: fragments of a file are ascending, so this is
+            amortised O(1) instead of a scan from the block start. }
+          while ofsFrag < Int64(frag) do
+          begin
+            Inc(offsetInBlock, ht[ofsFrag].usize);
+            Inc(ofsFrag);
+          end;
+          if GetEnvironmentVariable('ZQ_DBG') <> '' then
+            WriteLn(StdErr, 'frag=', frag, ' nb=', nb, ' cur=', curBlock,
+                    ' ofsFrag=', ofsFrag, ' off=', offsetInBlock,
+                    ' size=', ht[frag].usize);
           if ht[frag].usize > 0 then
             fo.Write((blockData + offsetInBlock)^, ht[frag].usize);
         end;
@@ -1474,6 +1778,7 @@ begin
       CloseFileAttrs(outPath, dtr.date, dtr.attr);
     end;
   finally
+    if pool <> nil then pool.Free;
     zq_buf_free(osb);
   end;
   Result := errors;
