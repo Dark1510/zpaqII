@@ -165,6 +165,36 @@ void zq_zpaql_outc(zq_zpaql *z, int ch) {
 }
 
 void zq_zpaql_run(zq_zpaql *z, zq_u32 input) {
+#ifndef ZQ_NOJIT
+  /* JIT path: compile once per program, then call the generated code.  The
+   * emitter is not ported yet, so zq_zpaql_assemble() returns 0 and we always
+   * fall back to the interpreter (identical semantics). */
+  if (!z->rcode) {
+    int need = 0;
+    if (z->hend > z->hbegin) need = zq_zpaql_assemble(z);
+    if (need > 0) {
+      zq_allocx(&z->rcode, &z->rcode_size, (need + 4095) & ~4095);
+      if (z->rcode) {
+        int n2 = zq_zpaql_assemble(z);
+        if (n2 > z->rcode_size) {
+          zq_allocx(&z->rcode, &z->rcode_size, (n2 + 4095) & ~4095);
+          zq_zpaql_assemble(z);
+        }
+      }
+    }
+  }
+  if (z->rcode) {
+    z->a = input;
+    {
+      zq_u32 rc = ((zq_u32 (*)(void))z->rcode)();
+      if (rc == 1) zq_error("Bad ZPAQL opcode");
+      if (rc == 2) zq_error("Out of memory");
+      if (rc == 3) zq_error("Write error");
+      if (rc != 0) zq_error("ZPAQL execution error");
+    }
+    return;
+  }
+#endif
   z->pc = z->hbegin;
   z->a = input;
   while (zq_zpaql_execute(z)) {
