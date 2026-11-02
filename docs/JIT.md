@@ -1,9 +1,14 @@
-# ZPAQL JIT — design and status
+# JIT — design and status
 
-Status: **implemented and verified**. `zq_zpaql_assemble()` is a direct port of
-upstream's `ZPAQL::assemble()` (libzpaq.cpp 3033–3812), byte for byte; the
-generated code is executed from `zq_zpaql_run()` and every build falls back to
-the interpreter when no code was produced.
+Two JITs, both direct ports of libzpaq 7.15:
+
+| function | upstream | port | runs from |
+|---|---|---|---|
+| HCOMP/PCOMP (ZPAQL program) | `ZPAQL::assemble()` | `zq_zpaql_assemble()` (`jit.c`) | `zq_zpaql_run()` |
+| predictor components | `Predictor::assemble_p()` | `zq_pred_assemble()` (`pjit.c`) | `zq_pred_predict/update()` |
+
+Both are x86-64 only, both fall back to the interpreter when no code could be
+produced, and `make NOJIT=1` removes them entirely.
 
 ## Contract
 
@@ -88,8 +93,63 @@ blocks, so previously assembled code points at freed memory. Upstream survives
 only because `calloc` tends to return the same address; the port frees `rcode`
 in `zq_zpaql_init_sizes()` so a fresh block always re-assembles.
 
-## Next step: `Predictor::assemble_p`
+# Predictor JIT
 
-The predictor loop (`Predictor::assemble_p`, `pcode`) is a separate JIT and is
-not ported yet; `make bench` shows it is now the main remaining gap at `-m5`
-(add 60–77 %, extract 60–74 % of upstream).
+`zq_pred_assemble()` is a direct port of `Predictor::assemble_p()`
+(libzpaq.cpp 3824–4590). One buffer holds both entry points:
+
+| offset | code |
+|---|---|
+| `pcode[0]` | `jmp predict` |
+| `pcode[5]` | `jmp update` |
+| `pcode[10]` | `predict(zq_predictor*) -> eax` |
+| `pcode[15]` | `update(zq_predictor*, int y)` |
+
+The predictor address arrives in `rdi` and the bit `y` in `rsi` (Linux-64 ABI),
+and the generated code pushes/pops `rbx`, `rbp`, `rsi`, `rdi`.  It keeps `c8`,
+`hmap4`, `cxt`, the component pointers and the sums in registers, emits the hash
+table lookup (`find`) inline for ICM/ISSE, and uses SSE2 (`pmaddwd`) for MIX.
+
+## Contract
+
+`update()` only updates the components: the `c8`/`hmap4` bookkeeping and the
+HCOMP run at byte boundaries stay in C (`zq_pred_update_c8`), exactly like
+upstream's `Predictor::update()`.  `zq_pred_init()` frees the code so the next
+`predict()` reassembles it for the new model (upstream does the same).
+
+## State mapping
+
+Offsets come from `offsetof(zq_predictor, …)` and `offsetof(zq_component, …)`.
+Our structures have upstream's member order and widths (`c8`, `hmap4`, `p[256]`,
+`h[256]`, `z`, `comp[256]`, then the tables; and per component `limit`, `cxt`,
+`a`, `b`, `c`, then the three arrays, whose first member is the data pointer),
+so the generated code addresses them exactly as upstream's does.
+
+## Verification
+
+* `tests/unit/pjit_diff.c` (`make test-e18`) builds random *valid* component
+  lists (CM, ICM, MATCH, AVG, MIX2, MIX, ISSE, SSE, 1–8 components per model),
+  each predictor gets its own VM, and the two paths are compared after every
+  bit: prediction, `p`, `h`, the component counters and the whole `cm`/`ht`/`a16`
+  contents.  300 configs × 512 bytes in the suite; 2000 × 4096 (8 M bits) while
+  developing, plus 1000 × 1024, all identical.
+* The E3 trace (`predictor_dump` + oracle) runs with the JIT on and matches the
+  reference; a JIT-enabled build of the oracle produces the same 4647-line trace
+  as this port, so the ported emitter is byte-exact against upstream's.
+
+## Known differences (both are upstream's behaviour)
+
+**Repeated `predict()` without `update()`.** `predict()` for ICM/ISSE saves the
+bit history in `cxt`, but `update()` re-reads the table entry it has just
+rewritten.  If `predict()` is called several times in a row, the entry no longer
+matches `cxt` and the JIT and the interpreter disagree — upstream's do too
+(verified: an oracle built with `-DNOJIT` and one built with the JIT produce
+different traces for 8 predicts followed by 8 updates).  The coder always
+predicts, codes and updates one bit at a time, so this is unreachable in
+practice; the E3 trace interleaves the calls for that reason.
+
+**32-bit stores into `size_t` fields.** The generated code writes `cxt`, `a`,
+`b`, `c` and `limit` with 32-bit stores, leaving the high half as it was (zero
+after `init()`).  `pjit_diff` compares only the low 32 bits, like upstream.
+For SSE the JIT stores the masked context and the interpreter the unmasked one;
+only `cxt & (cm.size()-1)` is ever used.

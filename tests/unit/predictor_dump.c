@@ -123,12 +123,17 @@ int main(int argc, char **argv) {
         int k, j;
         zq_pred_open(&pr, &hz);
         zq_pred_init(&pr);
+        /* Predict and update each bit in turn, the way the coder does:
+         * several predict() calls in a row are not equivalent because the
+         * component update re-reads the bit history it has just written. */
         for (k = 0; k < (int)sizeof(data); ++k) {
           const int c = data[k];
           fprintf(rf, "P %d", k);
-          for (j = 0; j < 8; ++j) fprintf(rf, " %d", zq_pred_predict(&pr));
+          for (j = 7; j >= 0; --j) {
+            fprintf(rf, " %d", zq_pred_predict(&pr));
+            zq_pred_update(&pr, (c >> j) & 1);
+          }
           fprintf(rf, "\n");
-          for (j = 7; j >= 0; --j) zq_pred_update(&pr, (c >> j) & 1);
         }
         zq_pred_free(&pr);
       }

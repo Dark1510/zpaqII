@@ -119,6 +119,11 @@ void zq_pred_init(zq_predictor *pr);
 void zq_pred_free(zq_predictor *pr);
 int  zq_pred_is_modeled(const zq_predictor *pr);
 int  zq_pred_predict(zq_predictor *pr);      /* 0..4095 */
+int  zq_pred_predict_ref(zq_predictor *pr);  /* interpreter, for tests */
+void zq_pred_update_ref(zq_predictor *pr, int y);
+#ifndef ZQ_NOJIT
+int  zq_pred_assemble(zq_predictor *pr);     /* predictor JIT, bytes needed */
+#endif
 void zq_pred_update(zq_predictor *pr, int y);
 size_t zq_pred_find(zq_predictor *pr, zq_arr *ht, int sizebits, zq_u32 cxt);
 

@@ -1,5 +1,6 @@
 // E3 oracle: predictor trace (p per bit), encoder output and decoder round
-// trip for a set of ZPAQL models, using libzpaq 7.15 built with -DNOJIT.
+// trip for a set of ZPAQL models, using libzpaq 7.15 built with -DNOJIT
+// (the trace interleaves predict/update so it does not depend on the JIT).
 // Usage: e3_oracle <manifest> <results>
 #include "libzpaq.h"
 
@@ -148,10 +149,15 @@ int main(int argc, char **argv) {
       pr.init();
       for (int k = 0; k < N; ++k) {
         const int c = data[k];
+        /* predict and update each bit in turn, the way the coder does:
+         * calling predict() several times in a row is not equivalent
+         * because update() re-reads the bit history it just wrote. */
         fprintf(rf, "P %d", k);
-        for (int j = 7; j >= 0; --j) fprintf(rf, " %d", pr.predict());
+        for (int j = 7; j >= 0; --j) {
+          fprintf(rf, " %d", pr.predict());
+          pr.update((c >> j) & 1);
+        }
         fprintf(rf, "\n");
-        for (int j = 7; j >= 0; --j) pr.update((c >> j) & 1);
       }
     }
 

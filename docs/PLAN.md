@@ -488,3 +488,39 @@ archive still prints usage.  No `.zpaq` suffix is appended to an empty name.
 
 `tests/cli.sh` checks that a file after an option is rejected by both and that
 the empty-archive dry run matches (78 checks).
+
+## E18: predictor JIT
+
+`Predictor::assemble_p()` is ported to `src/core/pjit.c` (`zq_pred_assemble`),
+x86-64 only, byte for byte against upstream.  The buffer holds `jmp predict` at
+0, `jmp update` at 5, `predict()` at 10 and `update()` at 15; the predictor is
+passed in `rdi` and the bit in `rsi`.  The generated code updates the
+components only — the `c8`/`hmap4` bookkeeping and the HCOMP call at byte
+boundaries stay in C, exactly like upstream.  `zq_pred_init()` frees the code
+and the next `predict()` reassembles it; `make NOJIT=1` removes it.
+
+Verification (see `docs/JIT.md` for the details):
+
+* `tests/unit/pjit_diff.c` (`make test-e18`): random valid models with 1..8
+  components of every type, JIT vs interpreter after every bit, including the
+  full `cm`/`ht`/`a16` tables.  300 × 512 bytes in the suite; 2000 × 4096 while
+  developing, all identical.
+* The E3 trace now interleaves `predict`/`update` (the way the coder uses the
+  predictor) and matches the oracle; an oracle built *with* the JIT produces the
+  same trace as the port, so the emitter itself is byte-exact.
+* Full suites: `make test`, `make matrix`, `tests/cli.sh`, and the NOJIT build.
+
+Measured on the 3 MB text sample and a 1 MB sample (`-t1`, best of 3):
+
+| method | upstream | interpreter | JIT | JIT/upstream |
+|---|---|---|---|---|
+| `-m1` | 0.14 s | 0.14 s | 0.14 s | 100 % |
+| `-m2` | 0.37 s | 0.42 s | 0.39 s | 95 % |
+| `-m3` | 0.69 s | 1.03 s | 0.79 s | 88 % |
+| `-m4` | 0.70 s | 1.05 s | 0.82 s | 86–96 % |
+| `-m5` | 2.79 s | 4.79 s | 2.81 s | 99 % |
+
+`-m5` went from 62 % to ~100 % and `-m4` from 65 % to ~90 %.  Extraction of the
+same 16.7 MB archive (`-m4`, best of 3) went from 7.47 s to 4.35 s (1.72×),
+i.e. 99 % of upstream.  Incompressible input at `-m4` picks a model-free
+method, so its remaining gap is in LZ77, not in the predictor.

@@ -18,7 +18,7 @@ criterion.
 | E3 | predictor, arithmetic coder | ✅ identical (13 models, 4608 byte traces, encoder bytes); asm kernels pending |
 | E4 | container, postprocessors, LZ77/BWT, makeConfig | ✅ 38 archives extracted + 51 blocks compressed bit-exactly |
 | E5 | JIDAC archiver in Pascal | ✅ streaming and journaling add/extract bit-identical (levels 0-5, updates, deletions, -until, -fragment, -to, -only/-not, -key, -index, multi-part, -summary, -test, -noattributes, -all, -repack); parallel -tN ✅ |
-| E6 | bit-exact matrix, fuzzing, performance | fuzzing ✅; matrix ✅; ZPAQL JIT ✅ (`docs/JIT.md`); asm kernels and predictor JIT pending |
+| E6 | bit-exact matrix, fuzzing, performance | fuzzing ✅; matrix ✅; ZPAQL JIT ✅; predictor JIT ✅ (`docs/JIT.md`); asm kernels pending |
 
 ## Build
 

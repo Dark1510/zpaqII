@@ -52,7 +52,7 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h
 
 # ---------------- tests ----------------
 
-test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c test-e6d
+test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c test-e18 test-e6d
 	@echo "== E1 (hash/AES/scrypt): OK =="
 	@echo "== E2 (ZPAQL VM + compiler): OK =="
 	@echo "== E3 (predictor + coder): OK =="
@@ -88,6 +88,19 @@ else
 test-e6c:
 	@echo "== E6c (ZPAQL JIT): skipped, NOJIT=1 build =="
 endif
+
+ifneq ($(NOJIT),1)
+test-e18: $(BUILD)/pjit_diff
+	@$(BUILD)/pjit_diff 300 512
+	@echo "== E18 (predictor JIT vs interpreter): OK =="
+else
+test-e18:
+	@echo "== E18 (predictor JIT): skipped, NOJIT=1 build =="
+endif
+
+$(BUILD)/pjit_diff: tests/unit/pjit_diff.c $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
 
 $(BUILD)/jit_diff: tests/unit/jit_diff.c $(BUILD)/libzqcore.a
 	@mkdir -p $(BUILD)
