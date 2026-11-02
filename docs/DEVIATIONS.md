@@ -1,44 +1,46 @@
 # Known deviations from zpaq 7.15
 
-## Exit codes on corrupt archives — fixed (E20)
+## Cosmetic differences
 
-The port used to return 1 for any extraction problem and to count skipped blocks
-in the exit code.  It now follows upstream exactly:
+Everything the commands *produce* (archives, extracted files, exit codes,
+stdout, stderr) matches upstream, with three exceptions that cannot match:
 
-| command | exit code |
-|---|---|
-| `list` | always 0 (it only reads, even if blocks were skipped) |
-| `extract` / `x` | 1 when a file could not be extracted completely (missing fragments), 2 for a fatal error (bad archive, wrong key, …) |
-| `extract -index F` | 0 once the index is written |
-| `extract -repack` | 0 on success |
-| `add` | 1 when the archive had read errors |
+* **Banner.** Both print `zpaq v7.15 journaling archiver, compiled <date>`, but
+  the date is each binary's build date (`__DATE__` vs FPC's `%DATE%`, different
+  formats).
+* **Timing line.** The `N.NNN seconds (all OK)` trailer is measured, so it
+  differs.  The test suite normalises both lines.
+* **stdout/stderr interleaving.** Stream *contents* are identical, but when
+  both are redirected to the same file the order can differ: FPC line-buffers
+  `Output`, so a `perror`-style message (e.g. `nope.txt: No such file or
+  directory` during `add`) appears in place, while upstream's fully buffered
+  stdout pushes it to the front.
 
-Two details matter:
+## Scope
 
-* `extract()` rejects a scan that returns no data at all (`sz < 1`) with
-  `archive not found`; `list()` does not perform that check, so a truncated
-  archive still lists and returns 0.
-* skipped blocks are counted only by `add`.  Extraction ignores them (as
-  upstream, which does not pass the error counter to `read_archive`), so an
-  archive with a damaged block that contains no files still extracts with 0.
+* Linux x86-64 only.  The JITs emit x86-64 for the System V ABI; Windows
+  (alternate data streams, `FSCTL_SET_SPARSE`, the Win64 register arguments)
+  is not implemented.
+* `zpaq`'s release build hides the "Advanced options" part of the usage text
+  (`#ifndef NDEBUG`), so the port prints the same short text.
 
-`tests/fuzz.py` now treats any disagreement on success/failure as a failure, and
-the 204-case run reports **0 failures and 0 exit-code divergences**.
+## Fixed during the port (kept here as a record)
 
-## Transaction dates — fixed (E20)
+These were real divergences found by differential testing and are now closed:
 
-`add` stamped the transaction with local time (`DateTimeToUnix(Now)` treats the
-local `TDateTime` as UTC in FPC).  It now uses `DateTimeToUnix(Now, False)`, so
-the C block name carries the UTC date like upstream's `gmtime`-based code, and
-archives are identical regardless of `TZ`.  `tests/cli.sh` checks it.
-
-## stdout/stderr interleaving
-
-The stream *contents* are identical to upstream's (the test suite compares them
-separately), but when both are redirected to the same file the order can differ:
-FPC line-buffers `Output`, so a `perror`-style message (e.g. `nope.txt: No such
-file or directory` during `add`) appears in place, while upstream's fully
-buffered stdout pushes it to the front.  Nothing else depends on the order.
+| area | was | is |
+|---|---|---|
+| exit codes on corrupt archives | 0/1 regardless of skipped blocks | like upstream: `list` always 0, `extract` 1 for incomplete files, 2 for fatal errors, `add` 1 on read errors |
+| transaction date | local time (`DateTimeToUnix(Now)`) | UTC, identical to upstream's `gmtime` |
+| `add -to`, `-only`, `-not`, symlinks | ignored / followed | applied, `lstat` scan like upstream |
+| streaming add | command-line order, no output | sortkey order, full progress output |
+| streaming extract | silent, overwrote multi-segment files | prints like upstream, appends segments |
+| `extract` over existing files | overwrote them | skips without `-force`, `=` when identical |
+| `equal()` for `-force` | decompressed and compared bytes (failed on preprocessed blocks) | compares fragment SHA-1s |
+| `-summary` | no duplicate detection | `^` entries and the real count |
+| `add -until` | ignored | rolls the archive back |
+| missing archive | empty listing, exit 0 | `perror` + exit 2 |
+| per-file I/O errors | aborted the command | reported and skipped, like upstream |
 
 ## Not deviations (upstream behaviour reproduced on purpose)
 
