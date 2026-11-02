@@ -560,8 +560,8 @@ end;
   (VFILE-hash.txt, written by "add -hash").  Nothing is written to disk: the
   extractor's output stream hashes instead.  Two passes, because the list has
   to be read before the files it describes can be verified. }
-function RunCheck(const archive, key: string; ver: Int64;
-                  threads: Integer): Integer;
+function RunCheck(const archive, key: string; ver: Int64; threads: Integer;
+                  const listFile, saveFile: string): Integer;
 var
   j: TJidac;
   errs: Integer;
@@ -578,9 +578,15 @@ begin
       j.summary := 1;
       j.checkMode := True;
       j.checkPass := 1;
-      j.files.Add('VFILE-hash.txt');
-      j.ReadArchive(errs, nfiles);
-      j.Extract(True, False);   { force: nothing is written anyway }
+      if listFile <> '' then
+        j.LoadHashFile(listFile)   { -checklist: an external list }
+      else
+      begin
+        j.files.Add('VFILE-hash.txt');
+        j.ReadArchive(errs, nfiles);
+        j.Extract(True, False);    { force: nothing is written anyway }
+      end;
+      if saveFile <> '' then j.SaveHashFile(saveFile);
       names.Assign(j.checkNames);
       vals.Assign(j.checkVals);
     finally
@@ -717,6 +723,7 @@ var
   allver: Integer;
   turboVal: Integer;
   hashFlag: Boolean;
+  checkListFile, saveListFile: string;
   tmp: TJidac;
   errs2: Integer;
   nfiles2: Cardinal;
@@ -755,6 +762,8 @@ begin
   frag := 6;
   turboVal := 0;
   hashFlag := False;
+  checkListFile := '';
+  saveListFile := '';
   GThreads := 0;
   summary := 0;
   nottype := '';
@@ -870,6 +879,16 @@ begin
         turboVal := -1
       else if (a = '-hash') then
         hashFlag := True
+      else if (a = '-checklist') then
+      begin
+        Inc(i);
+        checkListFile := ParamStr(i);
+      end
+      else if (a = '-savelist') then
+      begin
+        Inc(i);
+        saveListFile := ParamStr(i);
+      end
       else if (a = '-strict') then
       begin
         if not Legacy715 then StrictMode := True;
@@ -1026,7 +1045,8 @@ begin
       end;
     end
     else if (cmd = 'check') then
-      Finish(RunCheck(archive, key, untilVer, GThreads))
+      Finish(RunCheck(archive, key, untilVer, GThreads, checkListFile,
+                      saveListFile))
     else if (cmd = 'extract') or (cmd = 'x') or
             (cmd = 'list') or (cmd = 'l') then
     begin

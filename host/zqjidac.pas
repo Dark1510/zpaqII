@@ -80,6 +80,9 @@ type
     function Read(var Buffer; Count: LongInt): LongInt; override;
     function Write(const Buffer; Count: LongInt): LongInt; override;
     function Seek(const Offset: Int64; Origin: TSeekOrigin): Int64; override;
+    function CrcHex: string;
+    function XxhHex: string;
+    function ShaHex: string;
     function DigestLine: string;
     property Crc: TZqCrc32 read fCrc;
     property Xxh: TZqXxh64 read fXxh;
@@ -94,6 +97,7 @@ type
                        osb: TZqBuf; out bad: Boolean): Boolean;
     procedure ScanInto(edt: TStringList; const name: string);
     procedure ParseHashList(ms: TMemoryStream);
+    procedure ParseHashText(const raw: string);
     procedure CheckOne(const name: string; hs: THashStream);
   public
     fBlockMem: Double;       { memory used by the last block decompressed }
@@ -128,12 +132,17 @@ type
     checkNames: TStringList; { file names from VFILE-hash.txt, in order }
     checkVals: TStringList;  { the matching "xxh crc sha size" lines }
     checkGood, checkBad, checkMissing: Integer;
+    checkListFile: string;   { -checklist F: verify against this text list }
+    saveListFile: string;    { -savelist F: write the list the archive carries }
+    hashListText: string;    { the raw list last parsed }
     indexName: string;       { -index F: index archive used by add/extract }
     dhsize: Int64;           { total size of D blocks according to H blocks }
     dcsize: Int64;           { total size of D blocks according to C blocks }
     lastOffset: Int64;       { end of the last block scanned (upstream csize) }
     nfilesSeen: Cardinal;    { files found while scanning }
     isJidac: Boolean;
+    procedure LoadHashFile(const fn: string);
+    procedure SaveHashFile(const fn: string);
     constructor Create(const arc, pass: string; ver_: Int64);
     destructor Destroy; override;
     function IsSelected(const fn: string; rn: Boolean): Boolean;
@@ -821,6 +830,9 @@ begin
   checkNames.Sorted := False;
   checkNames.CaseSensitive := True;
   checkVals := TStringList.Create;
+  checkListFile := '';
+  saveListFile := '';
+  hashListText := '';
   SetLength(ht, 1);   { element 0 is not used, like upstream }
   FillChar(ht[0], SizeOf(THT), 0);
   SetLength(blocks, 0);
@@ -2437,6 +2449,27 @@ begin
   if Result <> fPos then Result := -1;
 end;
 
+function THashStream.CrcHex: string;
+begin
+  Result := LowerCase(Format('%.8x', [zq_crc32_result(@fCrc)]));
+end;
+
+function THashStream.XxhHex: string;
+begin
+  Result := LowerCase(Format('%.16x', [zq_xxh64_result(@fXxh)]));
+end;
+
+function THashStream.ShaHex: string;
+var
+  b: Integer;
+  h: PAnsiChar;
+begin
+  Result := '';
+  h := zq_sha256_result(fSha);
+  for b := 0 to 31 do
+    Result := Result + LowerCase(IntToHex(Ord(h[b]), 2));
+end;
+
 { "<xxh64> <crc32> <sha256>" of everything written, ready to compare }
 function THashStream.DigestLine: string;
 var
@@ -2465,18 +2498,15 @@ begin
   Result := 0;
 end;
 
-procedure TJidac.ParseHashList(ms: TMemoryStream);
+procedure TJidac.ParseHashText(const raw: string);
 var
-  raw, ln, vals, nm: string;
+  ln, vals, nm: string;
   lines: TStringList;
   i, p: Integer;
 begin
-  SetLength(raw, ms.Size);
-  if ms.Size > 0 then
-  begin
-    ms.Position := 0;
-    ms.Read(raw[1], Length(raw));
-  end;
+  hashListText := raw;
+  checkNames.Clear;
+  checkVals.Clear;
   lines := TStringList.Create;
   try
     lines.Text := raw;
@@ -2496,13 +2526,52 @@ begin
   end;
 end;
 
+procedure TJidac.LoadHashFile(const fn: string);
+var
+  fs: TFileStream;
+  raw: string;
+begin
+  fs := TFileStream.Create(fn, fmOpenRead or fmShareDenyWrite);
+  try
+    SetLength(raw, fs.Size);
+    if fs.Size > 0 then fs.Read(raw[1], Length(raw));
+  finally
+    fs.Free;
+  end;
+  ParseHashText(raw);
+end;
+
+procedure TJidac.SaveHashFile(const fn: string);
+var
+  fs: TFileStream;
+begin
+  fs := TFileStream.Create(fn, fmCreate);
+  try
+    if hashListText <> '' then fs.Write(hashListText[1], Length(hashListText));
+  finally
+    fs.Free;
+  end;
+end;
+
+procedure TJidac.ParseHashList(ms: TMemoryStream);
+var
+  raw: string;
+begin
+  SetLength(raw, ms.Size);
+  if ms.Size > 0 then
+  begin
+    ms.Position := 0;
+    ms.Read(raw[1], Length(raw));
+  end;
+  ParseHashText(raw);
+end;
+
 procedure TJidac.CheckOne(const name: string; hs: THashStream);
 var
   idx: Integer;
-  mine, exp: string;
+  exp, xxh, crc, sha, sz: string;
 begin
   if Pos('VFILE-hash', name) = 1 then Exit;   { the list itself is not listed }
-  mine := hs.DigestLine + ' ' + IntToStr(hs.Size);
   idx := checkNames.IndexOf(name);
   if idx < 0 then
   begin
@@ -2512,16 +2581,39 @@ begin
     Inc(checkMissing);
     Exit;
   end;
+  { "xxh64 crc32 sha256 size", compared cheapest first so the report says
+    which digest failed }
   exp := checkVals[idx];
-  if mine = exp then
+  xxh := Copy(exp, 1, NthSpace(exp, 1) - 1);
+  exp := Copy(exp, NthSpace(exp, 1) + 1, MaxInt);
+  crc := Copy(exp, 1, NthSpace(exp, 1) - 1);
+  exp := Copy(exp, NthSpace(exp, 1) + 1, MaxInt);
+  sha := Copy(exp, 1, NthSpace(exp, 1) - 1);
+  sz := Copy(exp, NthSpace(exp, 1) + 1, MaxInt);
+  if IntToStr(hs.Size) <> sz then
   begin
-    WriteLn('ok ', name);
-    Inc(checkGood);
+    WriteLn('FAIL ', name, ' (size ', hs.Size, ' != ', sz, ')');
+    Inc(checkBad);
+  end
+  else if hs.CrcHex <> LowerCase(crc) then
+  begin
+    WriteLn('FAIL ', name, ' (crc32)');
+    Inc(checkBad);
+  end
+  else if hs.XxhHex <> LowerCase(xxh) then
+  begin
+    WriteLn('FAIL ', name, ' (xxh64)');
+    Inc(checkBad);
+  end
+  else if hs.ShaHex <> LowerCase(sha) then
+  begin
+    WriteLn('FAIL ', name, ' (sha256)');
+    Inc(checkBad);
   end
   else
   begin
-    WriteLn('FAIL ', name);
-    Inc(checkBad);
+    WriteLn('ok ', name);
+    Inc(checkGood);
   end;
 end;
 
@@ -3100,7 +3192,8 @@ const
           fs.Free;
         end;
         hres := zq_sha256_result(sh);
-        line := Format('%.16x %.8x ', [zq_xxh64_result(@xh), zq_crc32_result(@crc)]);
+        line := LowerCase(Format('%.16x %.8x ',
+                                 [zq_xxh64_result(@xh), zq_crc32_result(@crc)]));
         for b := 0 to 31 do
           line := line + LowerCase(IntToHex(Ord(hres[b]), 2));
         Result := Result + line + ' ' + IntToStr(ent.size) + ' ' + list[k] + #10;

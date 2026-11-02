@@ -982,4 +982,17 @@ know about (verified with a two-version archive: 2 ok, 1 not in the list, exit
 
 Checked by hand: flipping one byte inside a data block gives `FAIL b.bin` plus
 the block checksum error and exit 1; an archive without `-hash` exits 2.
-`tests/cli.sh` covers the three cases (134 checks).
+## 2.3d: exporting and importing the list
+
+* `check archive -savelist F` writes the list to a plain text file (the same
+  format, lowercase hex so it can be compared with zlib/xxhash output).
+* `check archive -checklist F` verifies against that file instead of the copy
+  inside the archive, which is what you want when the archive travels without
+  its list or when the list is kept elsewhere.
+
+The comparison is now per digest and in increasing cost order: size, then
+CRC-32, then XXH64, then SHA-256, so a failure says which one broke
+(`FAIL a.txt (xxh64)`).  Case is ignored, so a hand-edited or
+other-tool-generated list works.
+
+`tests/cli.sh` covers the three cases (137 checks).

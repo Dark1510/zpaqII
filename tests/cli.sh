@@ -138,6 +138,19 @@ ZPAQII_NOW=$NOW "$P" add nolist.zpaq d/a.txt -m1 >/dev/null 2>&1
 r=$?
 if [ "$r" = 2 ]; then ok; else bad "check without a list (rc $r)"; fi
 
+# ---- -savelist / -checklist: export and import the digest list ----
+rm -f hl.txt hlb.txt
+"$P" check ck.zpaq -savelist hl.txt >/dev/null 2>&1
+n=$(grep -c . hl.txt 2>/dev/null)
+if [ "$n" = 4 ]; then ok; else bad "savelist has ${n:-0} lines"; fi
+"$P" check ck.zpaq -checklist hl.txt >/dev/null 2>&1
+r=$?
+if [ "$r" = 0 ]; then ok; else bad "checklist (rc $r)"; fi
+sed 's/^[0-9a-f]/f/' hl.txt > hlb.txt
+"$P" check ck.zpaq -checklist hlb.txt >/dev/null 2>&1
+r=$?
+if [ "$r" = 1 ]; then ok; else bad "checklist tampered (rc $r)"; fi
+
 # ---- -to: single target, several targets, prefix rename ----
 extract_both() { # tag, args...
   local tag=$1
