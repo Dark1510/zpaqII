@@ -2015,9 +2015,15 @@ begin
         if ht[blocks[b].start + Cardinal(k)].usize > 0 then
           Inc(offs, ht[blocks[b].start + Cardinal(k)].usize);
       end;
-      { Upstream prints the bytes the decompresser produced.  When only part of
-        the block is needed it stops at the fragment data, without the trailer. }
-      if fNeedCount[b] < blocks[b].frags then q := offs;
+      { Upstream prints the bytes the decompresser produced: it pulls 16 KiB
+        chunks until it has the bytes the selected files need, so a partially
+        used block stops at the next 16 KiB boundary (or at the end). }
+      if offs < q then
+      begin
+        j := Int64(((offs + 16383) div 16384) * 16384);
+        if j > q then j := q;
+        q := j;
+      end;
       PrintProgress(totalSize, totalDone, summary);
       if summary <= 0 then
         WriteLn('[', blocks[b].start, '..',

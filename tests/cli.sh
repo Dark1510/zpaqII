@@ -502,6 +502,34 @@ else
   bad "extract -force identical output (rc $ru/$rp)"
 fi
 
+# extract -only / -not: selection and output
+rm -rf eo1 eo2
+mkdir eo1 eo2
+"$Z" extract base.zpaq -to eo1 -only 'd/a.txt' -t1 >eu.log 2>&1
+ru=$?
+"$P" extract base.zpaq -to eo2 -only 'd/a.txt' -t1 >ep.log 2>&1
+rp=$?
+if [ "$ru" = "$rp" ] && diff -r eo1 eo2 >/dev/null 2>&1 &&
+   diff <(norm2 <eu.log | sed 's/eo1/eoX/g') \
+        <(norm2 <ep.log | sed 's/eo2/eoX/g') >/dev/null 2>&1; then
+  ok
+else
+  bad "extract -only output"
+fi
+rm -rf eo1 eo2
+mkdir eo1 eo2
+"$Z" extract base.zpaq -to eo1 -not d/sub -t1 >eu.log 2>&1
+ru=$?
+"$P" extract base.zpaq -to eo2 -not d/sub -t1 >ep.log 2>&1
+rp=$?
+if [ "$ru" = "$rp" ] && diff -r eo1 eo2 >/dev/null 2>&1 &&
+   diff <(norm2 <eu.log | sed 's/eo1/eoX/g') \
+        <(norm2 <ep.log | sed 's/eo2/eoX/g') >/dev/null 2>&1; then
+  ok
+else
+  bad "extract -not output"
+fi
+
 # list -s2: duplicates marked "^" and counted
 if diff <("$Z" list base.zpaq -s2 -t1 2>&1 | norm) \
         <("$P" list base.zpaq -s2 2>&1 | norm) >/dev/null 2>&1; then
