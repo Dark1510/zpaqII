@@ -343,3 +343,32 @@ plus `-all`, `-noattributes` and the `convert` command.
   `subpart(archive, versions+1)` and writes the C (size 0), H and I blocks to
   both the new part and F through a tee writer. `offset = end_of_index +
   sum(H block sizes)` is the logical position of the new part.
+
+## E8: parallel compression (done)
+
+`-tN` / `-threads N` are honoured; 0 (the default) means one thread per CPU,
+like upstream.  The main thread still decides the block boundaries, the method
+string and the fragment/dedup bookkeeping, so **the archive bytes do not depend
+on the thread count**: `tests/cli.sh` checks that `-t1`, `-t2`, `-t4` and `-t8`
+produce identical archives and that they equal upstream's `-t4`.
+
+Design (`TCompPool` in `host/zqjidac.pas`):
+
+* a ring of N slots (one per thread), each holding an input block, its
+  compressed output and an auto-reset event;
+* the main thread swaps its block buffer into a free slot (no copy), queues it
+  and only blocks when the ring is full, writing the oldest compressed block to
+  the archive in submission order;
+* workers pull blocks under a mutex with a *manual reset* event that is cleared
+  when the queue is empty (an auto-reset event loses wakeups when several jobs
+  are queued at once — that was a real deadlock here);
+* the C core is reentrant: its error stack is `_Thread_local` and
+  `zq_compress_block` is a self-contained entry point.
+
+Also: the main loop computed SHA-1 with one `zq_sha1_put` **per byte**; it now
+hashes each fragment with a single `zq_sha1_write`.
+
+Speed (60 MB, byte-LZ77 with 16 MB blocks): 2.03 s at `-t1`, 1.37 s at `-t8`.
+Parallelism is bounded by the main thread (~20 ms/MB) and by how many blocks the
+data produces: `-m5` uses blocks of up to 64 MiB, so a 20 MB input is a single
+block in upstream too and cannot be parallelised.

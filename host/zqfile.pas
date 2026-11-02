@@ -33,6 +33,8 @@ procedure MakePath(const path: string; date: Int64 = 0; attr: Int64 = 0);
 function Itos(x: Int64; n: Integer = 1): string;
 { replace ? and * in fn with digits of part }
 function SubPart(const fn: string; part: Integer): string;
+{ number of online CPUs (1 if it cannot be determined) }
+function CPUCount: Integer;
 
 implementation
 
@@ -192,6 +194,36 @@ function Itos(x: Int64; n: Integer = 1): string;
 begin
   Result := IntToStr(x);
   while Length(Result) < n do Result := '0' + Result;
+end;
+
+function CPUCount: Integer;
+var
+  fs: TFileStream;
+  buf: array[0..8191] of AnsiChar;
+  n, i: Integer;
+  prev: AnsiChar;
+begin
+  Result := 0;
+  prev := #10;
+  if FileExists('/proc/cpuinfo') then
+  begin
+    fs := TFileStream.Create('/proc/cpuinfo', fmOpenRead or fmShareDenyNone);
+    try
+      repeat
+        n := fs.Read(buf, SizeOf(buf));
+        for i := 0 to n - 1 do
+        begin
+          if (prev = #10) and (i + 8 < n) and
+             (StrLComp(@buf[i], 'processor', 9) = 0) then
+            Inc(Result);
+          prev := buf[i];
+        end;
+      until n <= 0;
+    finally
+      fs.Free;
+    end;
+  end;
+  if Result < 1 then Result := 1;
 end;
 
 function SubPart(const fn: string; part: Integer): string;

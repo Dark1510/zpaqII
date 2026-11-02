@@ -6,7 +6,8 @@
 program zpaqii;
 {$mode objfpc}{$H+}
 
-uses SysUtils, DateUtils, Classes, zqcore, zqfile, zqarchive, zqjidac;
+uses {$IFDEF UNIX}cthreads,{$ENDIF} SysUtils, DateUtils, Classes, zqcore,
+  zqfile, zqarchive, zqjidac;
 
 const
   VERSION = 'zpaqII 0.1';
@@ -93,6 +94,7 @@ begin
   WriteLn('         -index F            extract: write an index F for the archive');
   WriteLn('                             add: append a part and update index F');
   WriteLn('         -force/-f           add: re-add changed contents');
+  WriteLn('         -tN / -threads N    compression threads (0 = one per CPU)');
   WriteLn('         -until N            roll back to the N-th update');
   WriteLn('         Use * or ???? in the archive name for multi-part archives.');
 end;
@@ -382,6 +384,7 @@ var
   dateSet: Boolean;
   force: Boolean;
   frag: Integer;
+  nthreads: Integer;
   tmp: TJidac;
   errs2: Integer;
   nfiles2: Cardinal;
@@ -411,6 +414,7 @@ begin
   dateVal := 0;
   force := False;
   frag := 6;
+  nthreads := 0;
   nottype := '';
   files := TStringList.Create;
   files.CaseSensitive := True;
@@ -435,9 +439,12 @@ begin
         method := Copy(a, 3, MaxInt)
       else if (Copy(a, 1, 2) = '-t') and (Length(a) > 2) and
               (a[3] >= '0') and (a[3] <= '9') then
-        { single-threaded: -tN accepted and ignored }
+        nthreads := StrToIntDef(Copy(a, 3, MaxInt), 0)
       else if (a = '-threads') then
-        Inc(i)
+      begin
+        Inc(i);
+        nthreads := StrToIntDef(ParamStr(i), 0);
+      end
       else if (a = '-to') then
       begin
         while (i < ParamCount) and (ParamStr(i + 1) <> '') and
@@ -533,6 +540,7 @@ begin
       begin
         jadd := TJidac.Create(archive, key, DEFAULT_VERSION);
         jadd.fragment := frag;
+        jadd.threads := nthreads;
         jadd.indexName := indexName;
         for i := 0 to files.Count - 1 do jadd.files.Add(files[i]);
         try

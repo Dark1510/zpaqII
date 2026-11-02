@@ -6,7 +6,7 @@ unit zqjidac;
 
 interface
 
-uses SysUtils, Classes, BaseUnix, zqcore, zqfile, zqarchive;
+uses SysUtils, Classes, BaseUnix, SyncObjs, zqcore, zqfile, zqarchive;
 
 const
   ZQ_RED_DT: array[0..255] of Byte = (
@@ -83,6 +83,7 @@ type
     notfiles: TStringList;   { -not: exclude these prefixes }
     nottype: string;         { -not =...: list chars to suppress }
     fragment: Integer;       { -fragment N: 2^N KiB average fragment size }
+    threads: Integer;        { -tN: compression threads, 0 = one per CPU }
     indexName: string;       { -index F: index archive used by add/extract }
     dhsize: Int64;           { total size of D blocks according to H blocks }
     dcsize: Int64;           { total size of D blocks according to C blocks }
@@ -121,6 +122,55 @@ type
   TWriterPair = class
     a, b: TOutputArchive;
   end;
+
+  { ---- Parallel block compression (upstream CompressJob) ----------------
+    The main thread splits the input into blocks exactly as before (that is
+    what decides the archive bytes), hands each block to a pool of worker
+    threads and writes the compressed blocks to the archive in submission
+    order.  The output is therefore independent of the thread count. }
+
+  TCompSlot = class
+  public
+    inp, outb: TZqBuf;          { uncompressed input, compressed output }
+    sink: TOutSink;
+    meth, fname, comment: AnsiString;
+    ev: TEvent;                 { set by the worker when done }
+    err: Boolean;
+    errmsg: string;
+  end;
+
+  TCompPool = class;
+
+  TCompWorker = class(TThread)
+  private
+    fPool: TCompPool;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(p: TCompPool);
+  end;
+
+  TCompPool = class
+  private
+    fSlots: array of TCompSlot;
+    fWorkers: array of TCompWorker;
+    fLock: TCriticalSection;
+    fWork: TEvent;
+    fNextSubmit, fNextCompress, fNextFlush, fQueued, fStop: Integer;
+    procedure CompressOne(s: TCompSlot);
+    function Take: TCompSlot;
+    function Stopped: Boolean;
+  public
+    constructor Create(nthreads: Integer);
+    destructor Destroy; override;
+    function Slots: Integer;
+    function Queued: Integer;
+    procedure Start;
+    procedure Submit(var buf: TZqBuf; const meth, fname, comment: string);
+    function FlushOne(const w: TZqWriter): Int64;
+  end;
+
+
 
 procedure PairPut(ctx: Pointer; c: LongInt); cdecl;
 var
@@ -176,6 +226,206 @@ begin
   Result.ctx := Pointer(k);
 end;
 
+constructor TCompWorker.Create(p: TCompPool);
+begin
+  inherited Create(True);       { suspended until Start }
+  FreeOnTerminate := False;
+  fPool := p;
+end;
+
+procedure TCompWorker.Execute;
+var
+  s: TCompSlot;
+begin
+  while True do
+  begin
+    fPool.fWork.WaitFor(INFINITE);
+    s := fPool.Take;          { resets the event when there is no work left }
+    if fPool.Stopped then Exit;
+    if s <> nil then fPool.CompressOne(s);
+  end;
+end;
+
+constructor TCompPool.Create(nthreads: Integer);
+var
+  i: Integer;
+begin
+  inherited Create;
+  if nthreads < 1 then nthreads := 1;
+  SetLength(fSlots, nthreads);
+  for i := 0 to nthreads - 1 do
+  begin
+    fSlots[i] := TCompSlot.Create;
+    fSlots[i].inp := zq_buf_new(0);
+    fSlots[i].outb := zq_buf_new(1 shl 16);
+    fSlots[i].sink := TOutSink.Create;
+    fSlots[i].sink.buf := fSlots[i].outb;
+    fSlots[i].ev := TEvent.Create(nil, False, False, '');
+  end;
+  fLock := TCriticalSection.Create;
+  fWork := TEvent.Create(nil, True, False, '');   { manual reset: see Take }
+  SetLength(fWorkers, nthreads);
+  for i := 0 to nthreads - 1 do fWorkers[i] := TCompWorker.Create(Self);
+end;
+
+destructor TCompPool.Destroy;
+var
+  i: Integer;
+begin
+  fLock.Acquire;
+  try
+    fStop := 1;
+  finally
+    fLock.Release;
+  end;
+  for i := 0 to High(fWorkers) do fWork.SetEvent;
+  for i := 0 to High(fWorkers) do
+  begin
+    fWorkers[i].WaitFor;
+    fWorkers[i].Free;
+  end;
+  for i := 0 to High(fSlots) do
+  begin
+    zq_buf_free(fSlots[i].inp);
+    zq_buf_free(fSlots[i].outb);
+    fSlots[i].sink.Free;
+    fSlots[i].ev.Free;
+    fSlots[i].Free;
+  end;
+  fWork.Free;
+  fLock.Free;
+  inherited Destroy;
+end;
+
+procedure TCompPool.Start;
+var
+  i: Integer;
+begin
+  for i := 0 to High(fWorkers) do fWorkers[i].Start;
+end;
+
+function TCompPool.Slots: Integer;
+begin
+  Result := Length(fSlots);
+end;
+
+function TCompPool.Queued: Integer;
+begin
+  Result := fQueued;
+end;
+
+function TCompPool.Take: TCompSlot;
+begin
+  Result := nil;
+  fLock.Acquire;
+  try
+    if fStop <> 0 then Exit;
+    if fNextCompress >= fNextSubmit then
+    begin
+      { No queued work: clear the event under the same lock that Submit uses,
+        so a job queued right now cannot lose its wakeup. }
+      fWork.ResetEvent;
+      Exit;
+    end;
+    Result := fSlots[fNextCompress mod Length(fSlots)];
+    Inc(fNextCompress);
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TCompPool.Stopped: Boolean;
+begin
+  Result := fStop <> 0;
+end;
+
+procedure TCompPool.CompressOne(s: TCompSlot);
+var
+  wr: TZqWriter;
+begin
+  zq_buf_resize(s.outb, 0);
+  wr := OutSinkWriter(s.sink);
+  s.err := zq_compress_block(s.inp, wr, PAnsiChar(s.meth), PAnsiChar(s.fname),
+                             PAnsiChar(s.comment), 1) < 0;
+  if s.err then s.errmsg := string(zq_last_error) else s.errmsg := '';
+  zq_buf_resize(s.inp, 0);
+  s.ev.SetEvent;
+end;
+
+procedure TCompPool.Submit(var buf: TZqBuf; const meth, fname, comment: string);
+var
+  s: TCompSlot;
+  tmp: TZqBuf;
+begin
+  fLock.Acquire;
+  try
+    s := fSlots[fNextSubmit mod Length(fSlots)];
+    tmp := s.inp;               { swap: no copy of the block data }
+    s.inp := buf;
+    buf := tmp;
+    zq_buf_resize(buf, 0);
+    s.meth := AnsiString(meth);
+    s.fname := AnsiString(fname);
+    s.comment := AnsiString(comment);
+    s.err := False;
+    s.errmsg := '';
+    Inc(fNextSubmit);
+    Inc(fQueued);
+    fWork.SetEvent;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TCompPool.FlushOne(const w: TZqWriter): Int64;
+var
+  s: TCompSlot;
+  n, left: Int64;
+  p: PAnsiChar;
+begin
+  if fQueued <= 0 then Exit(0);
+  s := fSlots[fNextFlush mod Length(fSlots)];
+  s.ev.WaitFor(INFINITE);
+  if s.err then
+    raise Exception.Create('compression failed: ' + s.errmsg);
+  n := Int64(zq_buf_size(s.outb));
+  p := zq_buf_data(s.outb);
+  left := n;
+  while left > 0 do
+  begin
+    if Assigned(w.write) then
+    begin
+      if left > MaxInt then
+      begin
+        w.write(w.ctx, p, MaxInt);
+        Dec(left, MaxInt);
+      end
+      else
+      begin
+        w.write(w.ctx, p, LongInt(left));
+        left := 0;
+      end;
+    end
+    else
+    begin
+      w.put(w.ctx, Ord(p^));
+      Inc(p);
+      Dec(left);
+    end;
+  end;
+  zq_buf_resize(s.outb, 0);
+  fLock.Acquire;
+  try
+    Inc(fNextFlush);
+    Dec(fQueued);
+  finally
+    fLock.Release;
+  end;
+  Result := n;
+end;
+
+
+
 function BToI(var s: PAnsiChar): Cardinal;
 begin
   Result := Ord(s[0]) or (Ord(s[1]) shl 8) or (Ord(s[2]) shl 16) or
@@ -230,6 +480,7 @@ begin
   notfiles.CaseSensitive := True;
   nottype := '';
   fragment := 6;
+  threads := 0;
   indexName := '';
   dhsize := 0;
   dcsize := 0;
@@ -1452,6 +1703,8 @@ var
   idxArc: TOutputArchive;
   wIdx: TZqWriter;
   idxInit: Boolean;
+  pool: TCompPool;
+  nthreads: Integer;
   pair: TWriterPair;
   wpw: TZqWriter;
   idxSalt: array[0..31] of AnsiChar;
@@ -1706,6 +1959,7 @@ begin
   idxArc := nil;
   pair := nil;
   idxInit := False;
+  pool := nil;
   sb := zq_buf_new(SizeUInt(blocksize) + 4096 - 128);
   isb := zq_buf_new(64);
   GetMem(fragbuf, maxFrag);
@@ -1713,6 +1967,19 @@ begin
   try
     w := OutputWriter(outArc);
     outArc.Seek(header_pos, 0);
+
+    { Parallel compression: block boundaries and the method string are decided
+      here, so the archive is identical for any thread count. }
+    if threads <> 1 then
+    begin
+      nthreads := threads;
+      if nthreads < 1 then nthreads := CPUCount;
+      if nthreads > 1 then
+      begin
+        pool := TCompPool.Create(nthreads);
+        pool.Start;
+      end;
+    end;
 
     { Placeholder transaction header }
     PutI(isb, -1, 8);
@@ -1780,7 +2047,6 @@ begin
                 h := (h + Cardinal(c) + 1) * 271828182;
               o1[c1] := Byte(c);
               c1 := c;
-              zq_sha1_put(sha, c);
               if sz < maxFrag then fragbuf[sz] := AnsiChar(c);
               Inc(sz);
             end;
@@ -1791,6 +2057,9 @@ begin
               Break;
           end;
           Inc(total_done, sz);
+          { One call per fragment instead of one per byte: the per-byte
+            zq_sha1_put was the dominant cost of the main thread. }
+          if sz > 0 then zq_sha1_write(sha, @fragbuf[0], sz);
           Move(zq_sha1_result(sha)^, sha1result[0], 20);
           htptr := htinv.Find(ht, @sha1result[0]);
         end;
@@ -1871,17 +2140,31 @@ begin
                     ',' + Itos(Ord(exe > frags) * 2 + Ord(text > frags));
             fn := 'jDC' + Itos(date, 14) + 'd' +
                   Itos(Length(ht) - Int64(frags), 10);
-            hp := outArc.Tell();
-            if zq_compress_block(sb, w, PAnsiChar(AnsiString(m2)),
-                                 PAnsiChar(AnsiString(fn)),
-                                 PAnsiChar(jdcComment), 1) < 0 then
-              raise Exception.Create(string(zq_last_error));
-            csizeOne := outArc.Tell() - hp;
             SetLength(blocklist, Length(blocklist) + 1);
             blocklist[High(blocklist)] := Length(ht) - Int64(frags);
-            SetLength(csize, Length(csize) + 1);
-            csize[High(csize)] := csizeOne;
-            zq_buf_resize(sb, 0);
+            if pool <> nil then
+            begin
+              { Keep the ring full; writing happens in submission order. }
+              if pool.Queued >= pool.Slots then
+              begin
+                csizeOne := pool.FlushOne(w);
+                SetLength(csize, Length(csize) + 1);
+                csize[High(csize)] := csizeOne;
+              end;
+              pool.Submit(sb, m2, fn, jdcComment);
+            end
+            else
+            begin
+              hp := outArc.Tell();
+              if zq_compress_block(sb, w, PAnsiChar(AnsiString(m2)),
+                                   PAnsiChar(AnsiString(fn)),
+                                   PAnsiChar(jdcComment), 1) < 0 then
+                raise Exception.Create(string(zq_last_error));
+              csizeOne := outArc.Tell() - hp;
+              SetLength(csize, Length(csize) + 1);
+              csize[High(csize)] := csizeOne;
+              zq_buf_resize(sb, 0);
+            end;
             frags := 0;
             redundancy := 0;
             text := 0;
@@ -1925,6 +2208,15 @@ begin
         if dst <> nil then FreeAndNil(dst);
       end;
     end;
+
+    { Wait for the remaining blocks and write them in order. }
+    if pool <> nil then
+      while pool.Queued > 0 do
+      begin
+        csizeOne := pool.FlushOne(w);
+        SetLength(csize, Length(csize) + 1);
+        csize[High(csize)] := csizeOne;
+      end;
 
     cdatasize := outArc.Tell() - header_end;
 
@@ -2078,6 +2370,7 @@ begin
         DeleteFile(outName);
     end;
   finally
+    if pool <> nil then pool.Free;
     if idxArc <> nil then idxArc.Free;
     if pair <> nil then pair.Free;
     outArc.Free;

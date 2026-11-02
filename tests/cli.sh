@@ -249,15 +249,37 @@ if diff -r xu xo >/dev/null 2>&1; then ok; else bad "-index multiply extract"; f
 cd ..
 cd ..
 
-# ---- threads accepted (single threaded implementation) ----
+# ---- threads: parallel compression must not change the archive ----
+# 8 MB with 2 MB blocks -> several blocks, so the pool is really used.
+rm -rf tp
+mkdir tp
+cd tp || exit 1
+head -c 8000000 /dev/urandom > r.bin
+yes "parallel compression test 0123456789" | head -c 8000000 > t.txt
+for f in r.bin t.txt; do
+  for t in 1 2 4 8; do
+    rm -f "p$t.zpaq"
+    ZPAQII_NOW=$NOW "$P" add "p$t.zpaq" "$f" -method x1.1.5.0.3.22 -t"$t" >/dev/null 2>&1
+  done
+  rm -f up.zpaq
+  FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add up.zpaq "$f" -method x1.1.5.0.3.22 -t4 >/dev/null 2>&1
+  if cmp -s p1.zpaq p2.zpaq && cmp -s p1.zpaq p4.zpaq && cmp -s p1.zpaq p8.zpaq; then
+    ok
+  else
+    bad "threads: $f differs across -t1/-t2/-t4/-t8"
+  fi
+  if cmp -s p1.zpaq up.zpaq; then ok; else bad "threads: $f differs from upstream -t4"; fi
+done
 rm -f th.zpaq
-if ZPAQII_NOW=$NOW "$P" add th.zpaq t1.txt -m1 -t4 >/dev/null 2>&1 &&
-   ZPAQII_NOW=$NOW "$P" add th.zpaq t2.bin -m1 -threads 2 >/dev/null 2>&1 &&
+if ZPAQII_NOW=$NOW "$P" add th.zpaq t.txt -m1 -t4 >/dev/null 2>&1 &&
+   ZPAQII_NOW=$NOW "$P" add th.zpaq r.bin -m1 -threads 2 >/dev/null 2>&1 &&
    "$P" extract th.zpaq -to xo -t3 >/dev/null 2>&1; then
   ok
 else
   bad "-tN / -threads"
 fi
+cd ..
+
 
 echo
 echo "cli: $cases checks, $fails failures"
@@ -266,5 +288,5 @@ if [ $fails -ne 0 ]; then
   exit 1
 fi
 echo "not covered yet (known gaps):"
-echo "  parallel compression with -tN>1, list comparison against the file"
-echo "  system (=same / #different / +external, -summary, -test, -repack)"
+echo "  parallel extraction, list comparison against the file system"
+echo "  (=same / #different / +external, -summary, -test, -repack)"
