@@ -18,11 +18,7 @@ void zq_zpaql_clear(zq_zpaql *z) {
   zq_arr_resize(&z->h, 0, 4);
   zq_arr_resize(&z->m, 0, 1);
   zq_arr_resize(&z->r, 0, 4);
-  if (z->rcode) {
-    free(z->rcode);
-    z->rcode = NULL;
-    z->rcode_size = 0;
-  }
+  if (z->rcode || z->rcode_size) zq_allocx(&z->rcode, &z->rcode_size, 0);
 }
 
 void zq_zpaql_init(zq_zpaql *z) {
@@ -38,9 +34,7 @@ void zq_zpaql_free(zq_zpaql *z) {
   zq_arr_free(&z->m);
   zq_arr_free(&z->r);
   zq_arr_free(&z->outbuf);
-  if (z->rcode) free(z->rcode);
-  z->rcode = NULL;
-  z->rcode_size = 0;
+  if (z->rcode || z->rcode_size) zq_allocx(&z->rcode, &z->rcode_size, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -117,6 +111,9 @@ void zq_zpaql_init_sizes(zq_zpaql *z, int hbits, int mbits) {
   zq_arr_resize(&z->h, (size_t)1 << hbits, 4);
   zq_arr_resize(&z->m, (size_t)1 << mbits, 1);
   zq_arr_resize(&z->r, 256, 4);
+  /* The generated code bakes in the addresses of h and m, and resizing
+   * replaces them, so any previously assembled block is now invalid. */
+  if (z->rcode || z->rcode_size) zq_allocx(&z->rcode, &z->rcode_size, 0);
   z->a = z->b = z->c = z->d = 0;
   z->pc = z->f = 0;
 }
@@ -233,8 +230,11 @@ int zq_zpaql_execute(zq_zpaql *z) {
     case 27: z->d = ~z->d; break;
     case 28: z->d = 0; break;
     case 31: z->d = ZQ_R(z, ZQ_HDR(z, z->pc++)); break;
+    /* Swapping with *b or *c exchanges only the low byte of a (upstream's
+     * swap(U8&) is a^=x; x^=a; a^=x with x zero extended), so the high 24
+     * bits of a are preserved. */
     case 32: { zq_u8 t = ZQ_M(z, z->b); ZQ_M(z, z->b) = (zq_u8)z->a;
-               z->a = t; } break;
+               z->a = (z->a & 0xffffff00u) | (zq_u32)t; } break;
     case 33: ZQ_M(z, z->b) = (zq_u8)(ZQ_M(z, z->b) + 1); break;
     case 34: ZQ_M(z, z->b) = (zq_u8)(ZQ_M(z, z->b) - 1); break;
     case 35: ZQ_M(z, z->b) = (zq_u8)~ZQ_M(z, z->b); break;
@@ -244,7 +244,7 @@ int zq_zpaql_execute(zq_zpaql *z) {
       else ++z->pc;
       break;
     case 40: { zq_u8 t = ZQ_M(z, z->c); ZQ_M(z, z->c) = (zq_u8)z->a;
-               z->a = t; } break;
+               z->a = (z->a & 0xffffff00u) | (zq_u32)t; } break;
     case 41: ZQ_M(z, z->c) = (zq_u8)(ZQ_M(z, z->c) + 1); break;
     case 42: ZQ_M(z, z->c) = (zq_u8)(ZQ_M(z, z->c) - 1); break;
     case 43: ZQ_M(z, z->c) = (zq_u8)~ZQ_M(z, z->c); break;

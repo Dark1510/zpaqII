@@ -52,7 +52,7 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h
 
 # ---------------- tests ----------------
 
-test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a
+test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c
 	@echo "== E1 (hash/AES/scrypt): OK =="
 	@echo "== E2 (ZPAQL VM + compiler): OK =="
 	@echo "== E3 (predictor + coder): OK =="
@@ -78,6 +78,20 @@ test-e2: $(BUILD)/zpaql_dump $(BUILD)/e2_oracle
 	@$(BUILD)/e2_oracle $(BUILD)/e2_manifest.txt $(BUILD)/e2_upstream.txt
 	@$(BUILD)/zpaql_dump $(BUILD)/e2_manifest.txt $(BUILD)/e2_core.txt
 	@diff -u $(BUILD)/e2_upstream.txt $(BUILD)/e2_core.txt && echo "E2: identical to the oracle ($$(grep -c '^RESULT' $(BUILD)/e2_core.txt) configs)"
+
+ifneq ($(NOJIT),1)
+test-e6c: $(BUILD)/jit_diff
+	@test -f $(BUILD)/e2_manifest.txt || $(BUILD)/e2_oracle $(BUILD)/e2_manifest.txt $(BUILD)/e2_upstream.txt
+	@$(BUILD)/jit_diff $(BUILD)/e2_manifest.txt 600 64
+	@echo "== E6c (ZPAQL JIT vs interpreter): OK =="
+else
+test-e6c:
+	@echo "== E6c (ZPAQL JIT): skipped, NOJIT=1 build =="
+endif
+
+$(BUILD)/jit_diff: tests/unit/jit_diff.c $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
 
 $(BUILD)/zpaql_dump: tests/unit/zpaql_dump.c $(BUILD)/libzqcore.a
 	@mkdir -p $(BUILD)

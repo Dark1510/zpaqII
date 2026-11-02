@@ -265,6 +265,21 @@ the interpreter. `make NOJIT=1` must produce the same output (only slower).
 | extract text | 1 | 0.04 s | 0.17 s | 24 % |
 | extract text | 5 | 11.0 s | 22.0 s | 53 % |
 
+After the ZPAQL JIT (same machine, same corpus):
+
+| operation | level | upstream | port | ratio |
+|---|---|---|---|---|
+| add text | 1 | 0.08 s | 0.10 s | 80 % |
+| add bin | 1 | 0.09 s | 0.12 s | 75 % |
+| add text | 2 | 0.19 s | 0.22 s | 86 % |
+| add bin | 2 | 0.08 s | 0.11 s | 73 % |
+| add text | 5 | 11.4 s | 19.0 s | 60 % |
+| add bin | 5 | 16.0 s | 20.7 s | 77 % |
+| extract text | 1 | 0.04 s | 0.04 s | 100 % |
+| extract text | 2 | 0.03 s | 0.04 s | 75 % |
+| extract text | 5 | 11.5 s | 19.2 s | 60 % |
+| extract bin | 5 | 15.9 s | 21.6 s | 74 % |
+
 The interpreter already reaches 53–88 % of upstream for `add`. Extraction of
 small archives is dominated by per-block re-open and the O(n²) fragment offset
 loop in `TJidac.Extract`, which is the first thing to fix before any asm.
