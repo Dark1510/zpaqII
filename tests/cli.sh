@@ -157,6 +157,40 @@ mkdir xu xo
 "$P" extract 'op????.zpaq' -to xo >/dev/null 2>&1
 if diff -r xu xo >/dev/null 2>&1; then ok; else bad "multi-part extract"; fi
 
+# ---- -until: versions, from the end and dates ----
+rm -rf uv
+mkdir uv
+cd uv || exit 1
+for k in 1 2 3; do
+  printf 'version %d\n' "$k" > f.txt
+  touch -d @$((NOW + k * 1000)) f.txt
+  ZPAQII_NOW=$((NOW + k * 1000)) "$P" add u.zpaq f.txt -m1 >/dev/null 2>&1
+  FAKE_TIME=$((NOW + k * 1000)) LD_PRELOAD=$FT \
+    "$Z" add u.zpaq.orig f.txt -m1 -t1 >/dev/null 2>&1
+done
+if cmp -s u.zpaq u.zpaq.orig; then ok; else bad "-until: base archive"; fi
+for v in 0 1 2 3 4 -1 -2 -3; do
+  rm -rf au ao
+  mkdir au ao
+  "$Z" extract u.zpaq -to au -until "$v" -t1 >/dev/null 2>&1
+  "$P" extract u.zpaq -to ao -until "$v" >/dev/null 2>&1
+  if diff -r au ao >/dev/null 2>&1; then ok; else bad "-until $v"; fi
+done
+cd ..
+
+# ---- encrypted streaming archives ----
+rm -f su.zpaq so.zpaq
+FAKE_TIME=$NOW FAKE_RANDOM=5 LD_PRELOAD=$FT \
+  "$Z" add su.zpaq d/a.txt -method s4.1.5.0.3.22 -key pw -t1 >/dev/null 2>&1
+ZPAQII_NOW=$NOW FAKE_RANDOM=5 LD_PRELOAD=$FT \
+  "$P" add so.zpaq d/a.txt -method s4.1.5.0.3.22 -key pw >/dev/null 2>&1
+if cmp -s su.zpaq so.zpaq; then ok; else bad "streaming -key"; fi
+rm -rf xu xo
+mkdir xu xo
+"$Z" extract su.zpaq -to xu -key pw -t1 >/dev/null 2>&1 &&
+  "$P" extract so.zpaq -to xo -key pw >/dev/null 2>&1 &&
+  diff -r xu xo >/dev/null 2>&1 && ok || bad "streaming -key extract"
+
 # ---- -index: create an index from an archive (extract -index F) ----
 rm -rf ix
 mkdir ix

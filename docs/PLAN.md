@@ -314,9 +314,22 @@ Two real bugs were found while writing these checks:
   `stretchKey` password; the port passed the raw text, so archives were
   encrypted with a different key. Fixed with `KeyDigest()` in the host.
 
+Bugs found while auditing the option list and fixed:
+
+* **`-until N` was clamped to version 1** for any small N (`ParseUntil` forced
+  `v := 1`), so `-until 2..N` silently rolled back to the first update, and
+  `-until 0` extracted instead of returning nothing. Negative versions
+  (`-until -N`, count from the end) were not supported. Both now follow
+  upstream (`make test-e6d` checks 0..4 and -1..-3 against the oracle).
+* **`-key` was ignored when creating streaming archives**: `add -method s...
+  -key X` wrote an *unencrypted* archive without saying anything. It now
+  derives the salt (random for a new file, read from the file when appending)
+  and the archive is bit-identical to upstream; extract already worked.
+
 Still open in the CLI: parallel compression with `-tN > 1` (upstream's output
 depends on the thread count) and the `list` comparison against the file system
-(`=same`/`#different`/`+external` statuses, `-summary`, `-test`, `-repack`).
+(`=same`/`#different`/`+external` statuses, `-summary`, `-test`, `-repack`),
+plus `-all`, `-noattributes` and the `convert` command.
 
 ### How `-index` works (as implemented)
 

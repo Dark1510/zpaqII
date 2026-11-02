@@ -157,9 +157,12 @@ begin
   Result := (Int64(1) shl (20 + n)) - 4096;
 end;
 
-function AddStreaming(const archive, method: string; files: TStringList): Integer;
+function AddStreaming(const archive, method, key: string;
+                      files: TStringList): Integer;
 var
   out: TOutputArchive;
+  salt: array[0..31] of AnsiChar;
+  saltPtr: PAnsiChar;
   w: TZqWriter;
   b: TZqBuf;
   i: Integer;
@@ -171,7 +174,17 @@ var
   comment, fn: string;
   cptr: PAnsiChar;
 begin
-  out := TOutputArchive.Create(archive, '', nil, 0);
+  saltPtr := nil;
+  if key <> '' then
+  begin
+    if FileExistsUTF8(archive) then saltPtr := nil  { reuse the file's salt }
+    else
+    begin
+      zq_random(@salt[0], 32);
+      saltPtr := @salt[0];
+    end;
+  end;
+  out := TOutputArchive.Create(archive, key, saltPtr, 0);
   bs := BlockSizeOf(method);
   try
     w := OutputWriter(out);
@@ -314,19 +327,46 @@ begin
     Result := ExtractStreaming(j, False);
 end;
 
+{ -until N: N-th update, -N: count from the end, or a date.  Follows
+  upstream: single-digit fields are zero padded (2020-1-5), and values in the
+  date ranges get the default time appended. }
 function ParseUntil(const s: string): Int64;
 var
-  i: Integer;
+  i, digits: Integer;
   v: Int64;
+  neg: Boolean;
 begin
+  neg := (s <> '') and (s[1] = '-');
+  if neg then
+  begin
+    v := StrToInt64Def(Copy(s, 2, MaxInt), 0);
+    Exit(-v);
+  end;
   v := 0;
+  digits := 0;
   for i := 1 to Length(s) do
-    if (s[i] >= '0') and (s[i] <= '9') then v := v * 10 + Ord(s[i]) - Ord('0');
+  begin
+    if (s[i] >= '0') and (s[i] <= '9') then
+    begin
+      v := v * 10 + Ord(s[i]) - Ord('0');
+      Inc(digits);
+    end
+    else
+    begin
+      if digits = 1 then v := v div 10 * 100 + v mod 10;
+      digits := 0;
+    end;
+  end;
+  if digits = 1 then v := v div 10 * 100 + v mod 10;
   if (v >= 19000000) and (v <= 29991231) then v := v * 100 + 23;
   if (v >= 1900000000) and (v <= 2999123123) then v := v * 100 + 59;
   if (v >= 190000000000) and (v <= 299912312359) then v := v * 100 + 59;
-  if v < 19000101000000 then v := 1;   { version number }
-  Result := v;
+  if v > 9999999 then
+  begin
+    if (v < 19000101000000) or (v > 29991231235959) then
+      raise Exception.Create('date is incorrect, use -until YYYY-MM-DD HH:MM:SS');
+  end;
+  Result := v;   { small values are version numbers }
 end;
 
 var
@@ -342,6 +382,9 @@ var
   dateSet: Boolean;
   force: Boolean;
   frag: Integer;
+  tmp: TJidac;
+  errs2: Integer;
+  nfiles2: Cardinal;
 
 begin
   GStart := MTime;
@@ -477,7 +520,7 @@ begin
       files.CaseSensitive := True;
       files.Sort;
       if (method <> '') and (method[1] = 's') then
-        Finish(AddStreaming(archive, method, files));
+        Finish(AddStreaming(archive, method, key, files));
       if not dateSet then
       begin
         { testing hook: ZPAQII_NOW freezes the clock (unix seconds) }
@@ -513,6 +556,18 @@ begin
         for i := 0 to notfiles.Count - 1 do jadd.notfiles.Add(notfiles[i]);
         jadd.nottype := nottype;
         jadd.indexName := indexName;
+        if jadd.version < 0 then
+        begin
+          { -until -N: count from the end, like upstream }
+          tmp := TJidac.Create(archive, key, DEFAULT_VERSION);
+          try
+            tmp.ReadArchive(errs2, nfiles2);
+            jadd.version := jadd.version + Int64(Length(tmp.ver) - 1);
+            WriteLn('Version ', jadd.version);
+          finally
+            tmp.Free;
+          end;
+        end;
         if (cmd = 'list') or (cmd = 'l') then
           Finish(RunExtract(jadd, True, force))
         else
