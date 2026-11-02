@@ -2798,10 +2798,15 @@ var
   fragbuf: PAnsiChar;
   total_size, total_done, fsize, dedupesize, esize, newsize: Int64;
   dst: TStream;
-  buf: array[0..4095] of Byte;
+  { 64 KiB: the C scanner walks it in one call.  The read size does not affect
+    fragmentation (only the bytes do), so this is purely a throughput knob. }
+  buf: array[0..65535] of Byte;
   bufptr, buflen: Integer;
-  c, c1: Integer;
-  h, hits: Cardinal;
+  hits: Cardinal;
+  fscan: TZqFragscan;
+  got: Int64;
+  cut: Integer;
+  eof: Boolean;
   sz, fsz: Int64;
   htptr: Cardinal;
   sha1result: array[0..19] of AnsiChar;
@@ -3164,56 +3169,46 @@ begin
       begin
         sz := 0;
         hits := 0;
-        c := -1;
+        { Upstream starts this pass with c=EOF, so the synthetic pass at
+          fi = vf.Count (which only flushes the last block) runs once. }
+        eof := fi >= vf.Count;
         htptr := 0;
         FillChar(o1, 256, 0);
         if fi < vf.Count then
         begin
-          c1 := 0;
-          h := 0;
+          { The cut loop lives in the C core: same state machine, same cuts,
+            same hits and o1 table, but a call per buffer instead of a call (or
+            a branch) per byte. }
+          zq_fragscan_init(@fscan);
           zq_sha1_init(sha);
-          while True do
-          begin
+          cut := 0;
+          repeat
             if bufptr >= buflen then
             begin
               bufptr := 0;
-              buflen := dst.Read(buf, 4096);
+              buflen := dst.Read(buf, SizeOf(buf));
+              if buflen < 0 then buflen := 0;
             end;
             if bufptr >= buflen then
-              c := -1
-            else
             begin
-              c := buf[bufptr];
-              Inc(bufptr);
-            end;
-            if c >= 0 then
-            begin
-              if c = o1[c1] then
-              begin
-                h := (h + Cardinal(c) + 1) * 314159265;
-                Inc(hits);
-              end
-              else
-                h := (h + Cardinal(c) + 1) * 271828182;
-              o1[c1] := Byte(c);
-              c1 := c;
-              if sz < maxFrag then fragbuf[sz] := AnsiChar(c);
-              Inc(sz);
-            end;
-            if (c < 0) or (sz >= maxFrag) or
-               ((fragment <= 22) and
-                (h < (Cardinal(1) shl (22 - fragment))) and
-                (sz >= minFrag)) then
+              eof := True;
               Break;
-          end;
+            end;
+            got := zq_frag_scan(PAnsiChar(@buf[bufptr]), buflen - bufptr,
+                                @fscan, maxFrag, minFrag, fragment, @cut);
+            if got > 0 then
+            begin
+              Move(buf[bufptr], fragbuf[fscan.sz - got], got);
+              Inc(bufptr, got);
+            end;
+          until cut <> 0;
+          sz := fscan.sz;
+          hits := fscan.hits;
+          Move(fscan.o1[0], o1[0], 256);
           Inc(total_done, sz);
-          { One call per fragment instead of one per byte: the per-byte
-            zq_sha1_put was the dominant cost of the main thread. }
-          if GetEnvironmentVariable('ZQ_NOSHA') = '' then
-          begin
-            if sz > 0 then zq_sha1_write(sha, @fragbuf[0], sz);
-            Move(zq_sha1_result(sha)^, sha1result[0], 20);
-          end;
+          { One call per fragment instead of one per byte. }
+          if sz > 0 then zq_sha1_write(sha, fragbuf, sz);
+          Move(zq_sha1_result(sha)^, sha1result[0], 20);
           htptr := htinv.Find(ht, @sha1result[0]);
         end;
 
@@ -3357,7 +3352,7 @@ begin
           SetLength(e.ptr, Length(e.ptr) + 1);
           e.ptr[High(e.ptr)] := htptr;
         end;
-        if c < 0 then Break;
+        if eof then Break;
         Inc(fj);
       end;
       if fi < vf.Count then

@@ -738,3 +738,42 @@ files (`S_IFREG`) and directories (`S_IFDIR`); a symbolic link, fifo or device
 is skipped without a message.  The port used to follow the link and archive the
 target's contents, so the archive and the `Adding ...` count differed.
 `tests/cli.sh` checks an explicit symlink argument (112 checks).
+
+---
+
+# Phase 2
+
+The port is done; these are the improvements agreed in `ROADMAP.md`.  Every one
+keeps the archive readable by plain zpaq 7.15 and is measured against the
+oracle.
+
+## 2.1a: the fragment cut loop moves to the C core
+
+`add` used to cut files into fragments byte by byte in Pascal: one hash update,
+one order-1 table update, one bounds check and one copy per byte, which made
+that loop the dominant cost of a single-threaded `add`.
+
+`src/core/fragscan.c` now holds the same state machine in C
+(`zq_fragscan_init` / `zq_frag_scan`): it consumes a whole buffer per call and
+returns the number of bytes used, the fragment size, the prediction hits and
+the order-1 table — exactly what the block heuristics in `TJidac.Add` need.
+The host reads 64 KiB at a time and copies the consumed run into `fragbuf`
+with `Move`; the read size does not affect fragmentation, only throughput.
+
+The scanner reproduces upstream's quirks on purpose: the two multipliers, the
+per-fragment reset, the `sz >= maxfrag` cut, and the extra empty fragment when
+a file ends exactly on a cut (`fi = vf.Count` runs once, as upstream's
+`c = EOF`).
+
+Measured on 200 MB of random data (`taskset -c 7`, min of 3):
+
+| case | before | after |
+|---|---|---|
+| `add -m0 -t1` | 2.08 s | **1.56 s** |
+| `add -m1 -t1` | 2.07 s | **1.54 s** |
+
+The same 200 MB with upstream 7.15 at `-m1 -t1` takes 2.80 s.
+
+`make test` (E1-E6a) and `make test-e6d` (115 CLI checks) stay green; the
+archives are bit-identical for `-m0..-m5`, `-fragment 0..19`, empty files,
+`-t4` and large inputs.

@@ -151,6 +151,27 @@ double      zq_sha1_size(const zq_sha1 *s);
 zq_u64      zq_sha1_usize(const zq_sha1 *s);
 
 /* ------------------------------------------------------------------ */
+/* Fragment scanner (the content-defined cut loop of add)              */
+/* ------------------------------------------------------------------ */
+
+/* The state of one fragment while it is being cut.  The host reads sz,
+ * hits and o1 when a fragment ends; h is internal. */
+typedef struct zq_fragscan {
+  zq_i64 sz;      /* bytes in the fragment so far */
+  zq_u32 h;       /* rolling hash of the fragment */
+  zq_u32 hits;    /* bytes that matched the order-1 prediction */
+  int    c1;      /* previous byte (order-1 context) */
+  zq_u8  o1[256]; /* order-1 model: context -> predicted byte */
+} zq_fragscan;
+
+void  zq_fragscan_init(zq_fragscan *st);
+/* Consume up to n bytes of buf.  Returns the number consumed; *cut is set to 1
+ * when the fragment ended there.  The caller resets with zq_fragscan_init for
+ * the next fragment. */
+zq_i64 zq_frag_scan(const zq_u8 *buf, zq_i64 n, zq_fragscan *st,
+                    zq_i64 maxfrag, zq_i64 minfrag, int fragment, int *cut);
+
+/* ------------------------------------------------------------------ */
 /* SHA-256                                                             */
 /* ------------------------------------------------------------------ */
 

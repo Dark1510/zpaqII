@@ -75,6 +75,23 @@ procedure zq_sha1_write(s: TZqSha1; buf: PAnsiChar; n: Int64); cdecl; external;
 function zq_sha1_result(s: TZqSha1): PAnsiChar; cdecl; external;
 function zq_sha1_usize(s: TZqSha1): QWord; cdecl; external;
 
+{ --- fragment scanner: the cut loop of add() --- }
+type
+  { Must match struct zq_fragscan in include/zq.h byte for byte. }
+  TZqFragscan = record
+    sz: Int64;
+    h: Cardinal;
+    hits: Cardinal;
+    c1: LongInt;
+    o1: array[0..255] of Byte;
+  end;
+  PZqFragscan = ^TZqFragscan;
+
+procedure zq_fragscan_init(st: PZqFragscan); cdecl; external;
+function zq_frag_scan(buf: PAnsiChar; n: Int64; st: PZqFragscan;
+                      maxfrag, minfrag: Int64; fragment: LongInt;
+                      cut: PInteger): Int64; cdecl; external;
+
 { --- AES / key stretching / random --- }
 function zq_aes_new(key: PAnsiChar; keylen: LongInt; iv: PAnsiChar): TZqAes; cdecl; external;
 procedure zq_aes_free(a: TZqAes); cdecl; external;
