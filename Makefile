@@ -52,10 +52,11 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h
 
 # ---------------- tests ----------------
 
-test: test-e1 test-e2 test-e3
+test: test-e1 test-e2 test-e3 test-e4
 	@echo "== E1 (hash/AES/scrypt): OK =="
 	@echo "== E2 (ZPAQL VM + compiler): OK =="
 	@echo "== E3 (predictor + coder): OK =="
+	@echo "== E4 (container + extraction): OK =="
 
 test-e1: $(BUILD)/vectors_e1 $(BUILD)/e1_oracle
 	@$(BUILD)/vectors_e1 > $(BUILD)/e1_core.txt
@@ -108,3 +109,11 @@ $(UPSTREAM)/zpaq:
 
 clean:
 	rm -rf build build-debug build-nojit build-debug-nojit
+
+# E4 extraction matrix (upstream creates archives, the port extracts them)
+$(BUILD)/extract: tests/unit/extract.c $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
+
+test-e4: $(BUILD)/extract
+	@tests/e4.sh $(BUILD)

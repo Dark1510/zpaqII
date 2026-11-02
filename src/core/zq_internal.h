@@ -155,6 +155,76 @@ void zq_enc_encode(zq_encoder *e, int y, int p);
 void zq_enc_compress(zq_encoder *e, int c);   /* c is 0..255 or -1 (EOS) */
 
 /* ------------------------------------------------------------------ */
+/* Postprocessor, Decompresser, Compressor                             */
+/* ------------------------------------------------------------------ */
+
+typedef struct zq_postproc {
+  int state;   /* 0=INIT, 1=PASS, 2..4=loading, 5=POST */
+  int hsize;
+  int ph, pm;
+  zq_zpaql z;
+} zq_postproc;
+
+void zq_pp_open(zq_postproc *pp, int h, int m);
+void zq_pp_free(zq_postproc *pp);
+void zq_pp_set_output(zq_postproc *pp, zq_writer *out);
+void zq_pp_set_sha1(zq_postproc *pp, zq_sha1 *sha1);
+int  zq_pp_write(zq_postproc *pp, int c);
+int  zq_pp_state(const zq_postproc *pp);
+
+enum { ZQ_BLOCK, ZQ_FILENAME, ZQ_COMMENT, ZQ_DATA, ZQ_SEGEND };
+enum { ZQ_FIRSTSEG, ZQ_SEG, ZQ_SKIP };
+
+typedef struct zq_decompresser zq_decompresser;
+
+struct zq_decompresser {
+  zq_zpaql z;
+  zq_decoder dec;
+  zq_postproc pp;
+  int state;
+  int decode_state;
+};
+
+enum { ZQ_C_INIT, ZQ_C_BLOCK1, ZQ_C_SEG1, ZQ_C_BLOCK2, ZQ_C_SEG2 };
+
+typedef struct zq_compressor zq_compressor;
+
+struct zq_compressor {
+  zq_zpaql z, pz;
+  zq_encoder enc;
+  zq_reader *in;
+  zq_sha1 sha1;
+  char sha1result[20];
+  int state;
+  int verify;
+};
+
+void zq_c_open(zq_compressor *c);
+void zq_c_close(zq_compressor *c);
+void zq_c_set_output(zq_compressor *c, zq_writer *out);
+void zq_c_set_input(zq_compressor *c, zq_reader *in);
+void zq_c_set_verify(zq_compressor *c, int v);
+void zq_c_write_tag(zq_compressor *c);
+void zq_c_start_block_bytes(zq_compressor *c, const zq_u8 *hcomp);
+void zq_c_start_block_level(zq_compressor *c, int level);
+void zq_c_start_block(zq_compressor *c, const char *config, int *args,
+                      zq_writer *pcomp_cmd);
+void zq_c_start_segment(zq_compressor *c, const char *filename,
+                        const char *comment);
+void zq_c_post_process(zq_compressor *c, const char *pcomp, int len);
+int  zq_c_compress(zq_compressor *c, int n);
+void zq_c_end_segment(zq_compressor *c, const char *sha1string);
+char *zq_c_end_segment_checksum(zq_compressor *c, zq_i64 *size, int dosha1);
+void zq_c_end_block(zq_compressor *c);
+void zq_c_hcomp(zq_compressor *c, zq_writer *out);
+int  zq_c_pcomp(zq_compressor *c, zq_writer *out);
+zq_i64 zq_c_size(zq_compressor *c);
+const char *zq_c_checksum(zq_compressor *c);
+
+/* Built-in block models for startBlock(level) (generated). */
+extern const zq_u8 zq_models[299];
+
+/* ------------------------------------------------------------------ */
 /* Compiler                                                            */
 /* ------------------------------------------------------------------ */
 

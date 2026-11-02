@@ -191,6 +191,40 @@ void zq_scrypt(const char *pw, int pwlen, const char *salt, int saltlen,
 void zq_stretch_key(char *out, const char *in, const char *salt);
 void zq_random(char *buf, int n);
 
+/* ------------------------------------------------------------------ */
+/* Block container (libzpaq Decompresser / Compressor)                 */
+/* ------------------------------------------------------------------ */
+
+typedef struct zq_decompresser zq_decompresser;
+
+zq_decompresser *zq_d_new(void);
+void zq_d_free(zq_decompresser *d);
+
+void zq_d_set_input(zq_decompresser *d, zq_reader *in);
+void zq_d_set_output(zq_decompresser *d, zq_writer *out);
+void zq_d_set_sha1(zq_decompresser *d, zq_sha1 *sha1);
+int  zq_d_buffered(const zq_decompresser *d);
+
+/* 1 = block header found, 0 = end of input */
+int  zq_d_find_block(zq_decompresser *d, double *memptr);
+/* 1 = segment found (filename written if not NULL), 0 = end of block */
+int  zq_d_find_filename(zq_decompresser *d, zq_writer *filename);
+void zq_d_read_comment(zq_decompresser *d, zq_writer *comment);
+/* n bytes, or the whole segment when n < 0.  Returns 0 at segment end. */
+int  zq_d_decompress(zq_decompresser *d, int n);
+/* sha1string21: [0] = 0 (no checksum) or 1, then the 20-byte SHA-1. */
+void zq_d_read_segment_end(zq_decompresser *d, char *sha1string21);
+void zq_d_hcomp(zq_decompresser *d, zq_writer *out);
+int  zq_d_pcomp(zq_decompresser *d, zq_writer *out);
+
+/* Compress one block (single segment) with a zpaq method string. */
+void zq_compress_block(zq_buf *in, zq_writer *out, const char *method,
+                       const char *filename, const char *comment, int dosha1);
+
+/* Single-segment block, whole input buffer (libzpaq::compress). */
+void zq_compress(zq_reader *in, zq_writer *out, const char *method,
+                 const char *filename, const char *comment, int dosha1);
+
 #ifdef __cplusplus
 }
 #endif

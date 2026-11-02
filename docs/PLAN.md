@@ -139,6 +139,10 @@ let the oracle (upstream) validate each piece as early as possible.
   the embedded one, plain C, unchanged semantics).
 - **Acceptance:** round-trip of all 5 levels + bit-identical `compressBlock`
   against upstream over the corpus; corrupted blocks must fail SHA-1 the same way.
+- **Status (extract side):** `Decompresser`, `PostProcessor` (PASS/PROG), LZ77 and
+  BWT postprocessors working: 38 upstream streaming archives (store, LZ77, BWT,
+  E8E9, multi-block, empty input) extracted identically with per-segment SHA-1
+  verification. Compressor + `makeConfig` + `LZBuffer` pending.
 
 ### E5 — Archiver (Pascal)
 - `fio.pas` (file layer, dates/attributes win/unix), `archive.pas`

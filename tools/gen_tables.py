@@ -14,6 +14,8 @@ path = sys.argv[1] if len(sys.argv) > 1 else \
     "/mnt/IA_LAB/agentes/zpaqII/upstream-zpaq/libzpaq.cpp"
 src = open(path, encoding="utf-8", errors="surrogateescape").read()
 
+MODELS_PAT = r"static\s+const\s+char\s+models\[\]=\{(.*?)\};"
+
 TABLES = [
     ("sns", "zq_sns", "zq_u8", 1024,
      r"static\s+const\s+U8\s+sns\[1024\]\s*=\s*\{(.*?)\};"),
@@ -60,5 +62,20 @@ for name, cname, ctype, expect, pat in TABLES:
         out.append("    " + ", ".join(str(v) for v in vals[i:i + 8]) + ",")
     out.append("};")
     out.append("")
+
+# Built-in block models (startBlock(level)); stored as unsigned bytes.
+mm = re.search(MODELS_PAT, src, re.S)
+if not mm:
+    raise SystemExit("models[] table not found")
+body = re.sub(r"//[^\n]*", "", mm.group(1))
+vals = []
+for a, b in re.findall(r"\(char\)\s*(-?\d+)|\b(-?\d+)\b", body):
+    vals.append(int(a) if a else int(b))
+assert len(vals) == 299, len(vals)
+out.append("/* Built-in models for startBlock(level): min, mid, max. */")
+out.append("const zq_u8 zq_models[299] = {")
+for i in range(0, len(vals), 8):
+    out.append("    " + ", ".join(str(v & 255) for v in vals[i:i + 8]) + ",")
+out.append("};")
 
 sys.stdout.write("\n".join(out) + "\n")
