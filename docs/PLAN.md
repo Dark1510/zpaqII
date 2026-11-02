@@ -619,3 +619,60 @@ Measured (`-t1`, pinned core, best of 3):
 | extract 16.7 MB `-m4` | 4.15 s | 4.06 s | 102 % |
 
 The port is now at or above upstream on every measured workload.
+
+## E22: console output and extract/scan semantics
+
+The data was already bit-exact, but the commands printed almost nothing: the
+console output of `add`/`extract` had never been ported (the tests compared
+archives and files, not stdout).  Bringing it over uncovered four real bugs.
+
+**Output**
+
+* `add`: `Adding %f MB in %d files -method %s -threads %d at %s.`, the `+`/`#`
+  per-file lines with sizes (and `-> newname` after `-to`), `[a..b] size -method
+  m` per block, `N +added, M -removed.`, the final
+  `%f + (%f -> %f -> %f) = %f MB` on stderr, `truncating archive from X to Y`,
+  `deleted <name>`, and the `Warning: adjusting date from X to Y` text.
+* `extract`: `Extracting %f MB in %d files -threads %d`, `[a..b] -> bytes`,
+  `> name` per file, `= name` / `? name`, `N ?existing files skipped (-force
+  overwrites).` / `N =identical files skipped.`, the failed-extraction list and
+  `Extracted X of Y files OK (N errors)`.
+* `-summary N` progress (`16.00% 0:00:00 `, followed by `\r` when summary>0)
+  for both commands.
+* `list -s N`: files with the same fragment list as the previous entry are
+  marked `^`, and the trailer counts them (`N of largest M files are
+  ^duplicates`); the sort now uses upstream's full comparator (size, fragment
+  list, status, name), which also fixes ties.
+
+**Bugs found while testing the output**
+
+* `add -to` was ignored: the files were stored under their original names and
+  the archive differed.  `rename()` is now applied where upstream applies it
+  (keeper marking, lookups and the I block).
+* `-only` / `-not` did not filter the scan: upstream's `addfile()` checks
+  `isselected()` for every entry it records (while still traversing excluded
+  directories).  `ScanInto()` now does the same.
+* Streaming `add` appended the files in command-line order instead of
+  upstream's sortkey order (extension, then descending size), so archives with
+  more than one file differed.  Fixed, and the append offset/banner now come
+  from the scan (`read_archive` counts only selected entries, like upstream).
+* Streaming extraction of a file split over several segments overwrote itself:
+  a segment with an empty name continues the previous file, it does not start a
+  new one.
+* The output archive is now closed before `truncate`/`delete` (our file layer
+  keeps a share lock, so an empty update failed with "Bad file number").
+
+**Extraction semantics**
+
+`Extract()` was rewritten to follow upstream: label the entries (`-1` skip /
+`0` extract, printing `=`/`?`), then walk the blocks in order, printing the
+block line and writing the files of that block in dt order (the order upstream
+shows).  Without `-force` an existing file is **skipped** (the port used to
+overwrite it); with `-force` an identical file is skipped and only its date and
+permissions are applied.
+
+`tests/cli.sh` now compares stdout *and* stderr (normalised for the banner,
+timing and ETA) for: `add` (new, update with `#`/`-`, `-summary`, `-to`,
+`-only`, `-not`), `extract` (plain, second run with `?`, `-force` with `=`,
+`-test`, `-only`, `-summary`), streaming add/extract, and `list -s2` with
+duplicates: 92 checks.

@@ -402,6 +402,175 @@ else
   bad "empty archive name (dry run)"
 fi
 
+# ---- add/extract console output (progress, +/#/-, >/?/=) ----
+# Normalise what cannot match: banner, timing, and the ETA prefix of the
+# -summary progress lines.
+norm2() {
+  grep -v -e '^zpaq v' -e ' seconds (' |
+    sed -E 's/^ *[0-9]+\.[0-9]+% [0-9]+:[0-9][0-9]:[0-9][0-9] //'
+}
+rm -rf au ap
+mkdir au ap
+printf 'uno\n' > au/s1.txt
+head -c 8000 /dev/urandom > au/s2.bin
+touch -d @$NOW au/s1.txt au/s2.bin
+cp -p au/s1.txt au/s2.bin ap/
+(cd au && FAKE_TIME=$NOW LD_PRELOAD=$FT \
+  "$Z" add a.zpaq s1.txt s2.bin -m1 -t1 >log 2>err)
+ru=$?
+(cd ap && ZPAQII_NOW=$NOW "$P" add a.zpaq s1.txt s2.bin -m1 -t1 >log 2>err)
+rp=$?
+if [ "$ru" = "$rp" ] && cmp -s au/a.zpaq ap/a.zpaq &&
+   diff <(norm2 <au/log) <(norm2 <ap/log) >/dev/null 2>&1 &&
+   diff <(norm2 <au/err) <(norm2 <ap/err) >/dev/null 2>&1; then
+  ok
+else
+  bad "add output (rc $ru/$rp)"
+fi
+
+# update: one changed file (#) and one removed (-)
+printf 'dos\n' > au/s2.bin
+printf 'dos\n' > ap/s2.bin
+touch -d @$((NOW + 100)) au/s2.bin ap/s2.bin
+rm -f au/s1.txt ap/s1.txt
+(cd au && FAKE_TIME=$((NOW + 100)) LD_PRELOAD=$FT \
+  "$Z" add a.zpaq s2.bin -m1 -t1 >log 2>err)
+ru=$?
+(cd ap && ZPAQII_NOW=$((NOW + 100)) \
+  "$P" add a.zpaq s2.bin -m1 -t1 >log 2>err)
+rp=$?
+if [ "$ru" = "$rp" ] && cmp -s au/a.zpaq ap/a.zpaq &&
+   diff <(norm2 <au/log) <(norm2 <ap/log) >/dev/null 2>&1 &&
+   diff <(norm2 <au/err) <(norm2 <ap/err) >/dev/null 2>&1; then
+  ok
+else
+  bad "add update output (rc $ru/$rp)"
+fi
+
+# -summary 1 keeps only the progress line
+(cd au && FAKE_TIME=$NOW LD_PRELOAD=$FT \
+  "$Z" add s.zpaq s2.bin -m1 -summary 1 -t1 >log 2>&1)
+ru=$?
+(cd ap && ZPAQII_NOW=$NOW "$P" add s.zpaq s2.bin -m1 -summary 1 -t1 >log 2>&1)
+rp=$?
+if [ "$ru" = "$rp" ] && cmp -s au/s.zpaq ap/s.zpaq &&
+   diff <(norm2 <au/log) <(norm2 <ap/log) >/dev/null 2>&1; then
+  ok
+else
+  bad "add -summary output"
+fi
+
+# extract: "Extracting ...", block lines and "> file"
+rm -rf eu ep
+mkdir eu ep
+"$Z" extract base.zpaq -to eu -t1 >eu.log 2>&1
+ru=$?
+"$P" extract base.zpaq -to ep -t1 >ep.log 2>&1
+rp=$?
+if [ "$ru" = "$rp" ] && diff -r eu ep >/dev/null 2>&1 &&
+   diff <(norm2 <eu.log | sed 's/eu\//ep\//g') <(norm2 <ep.log) >/dev/null 2>&1
+then
+  ok
+else
+  bad "extract output (rc $ru/$rp)"
+fi
+
+# extracting again: "? file" for existing files, then 0 files
+"$Z" extract base.zpaq -to eu -t1 >eu.log 2>&1
+ru=$?
+"$P" extract base.zpaq -to ep -t1 >ep.log 2>&1
+rp=$?
+if [ "$ru" = "$rp" ] &&
+   diff <(norm2 <eu.log | sed 's/eu\//ep\//g') <(norm2 <ep.log) >/dev/null 2>&1
+then
+  ok
+else
+  bad "extract existing output (rc $ru/$rp)"
+fi
+
+# -force over identical files: "= file"
+"$Z" extract base.zpaq -to eu -force -t1 >eu.log 2>&1
+ru=$?
+"$P" extract base.zpaq -to ep -force -t1 >ep.log 2>&1
+rp=$?
+if [ "$ru" = "$rp" ] &&
+   diff <(norm2 <eu.log | sed 's/eu\//ep\//g') <(norm2 <ep.log) >/dev/null 2>&1
+then
+  ok
+else
+  bad "extract -force identical output (rc $ru/$rp)"
+fi
+
+# list -s2: duplicates marked "^" and counted
+if diff <("$Z" list base.zpaq -s2 -t1 2>&1 | norm) \
+        <("$P" list base.zpaq -s2 2>&1 | norm) >/dev/null 2>&1; then
+  ok
+else
+  bad "list -s2 duplicates"
+fi
+
+# ---- add: selection and -to rename ----
+rm -rf su sp
+mkdir -p su/d1 su/d2 sp/d1 sp/d2
+printf 'a\n' > su/d1/a.txt
+printf 'b\n' > su/d1/b.txt
+printf 'c\n' > su/d2/c.txt
+touch -d @$NOW su/d1/a.txt su/d1/b.txt su/d2/c.txt
+cp -p su/d1/a.txt su/d1/b.txt sp/d1/
+cp -p su/d2/c.txt sp/d2/
+addsel() {  # tag, args...
+  local tag=$1; shift
+  rm -f su/x.zpaq sp/x.zpaq
+  (cd su && FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add x.zpaq "$@" -m1 -t1 >log 2>err)
+  ru=$?
+  (cd sp && ZPAQII_NOW=$NOW "$P" add x.zpaq "$@" -m1 -t1 >log 2>err)
+  rp=$?
+  if [ "$ru" = "$rp" ] && cmp -s su/x.zpaq sp/x.zpaq &&
+     diff <(norm2 <su/log) <(norm2 <sp/log) >/dev/null 2>&1 &&
+     diff <(norm2 <su/err) <(norm2 <sp/err) >/dev/null 2>&1; then
+    ok
+  else
+    bad "add $tag (rc $ru/$rp)"
+  fi
+}
+addsel "-only" d1 -only '*.txt'
+addsel "-not" d1 d2 -not d2
+addsel "-to rename" d1 -to out
+addsel "-to several" d1/a.txt d2/c.txt -to x.a y.c
+
+# ---- streaming add and extract output ----
+rm -rf stu stp
+mkdir stu stp
+printf 'uno dos tres\n' > stu/f.txt
+head -c 5000 /dev/urandom > stu/g.bin
+touch -d @$NOW stu/f.txt stu/g.bin
+cp -p stu/f.txt stu/g.bin stp/
+(cd stu && FAKE_TIME=$NOW LD_PRELOAD=$FT \
+  "$Z" add s.zpaq f.txt g.bin -method s1.0 -t1 >log 2>err)
+ru=$?
+(cd stp && ZPAQII_NOW=$NOW "$P" add s.zpaq f.txt g.bin -method s1.0 -t1 >log 2>err)
+rp=$?
+if [ "$ru" = "$rp" ] && cmp -s stu/s.zpaq stp/s.zpaq &&
+   diff <(norm2 <stu/log) <(norm2 <stp/log) >/dev/null 2>&1 &&
+   diff <(norm2 <stu/err) <(norm2 <stp/err) >/dev/null 2>&1; then
+  ok
+else
+  bad "streaming add output (rc $ru/$rp)"
+fi
+rm -rf stu.out stp.out
+mkdir stu.out stp.out
+(cd stu && "$Z" extract s.zpaq -to ../stu.out -t1 >log 2>&1)
+ru=$?
+(cd stp && "$P" extract s.zpaq -to ../stp.out -t1 >log 2>&1)
+rp=$?
+if [ "$ru" = "$rp" ] && diff -r stu.out stp.out >/dev/null 2>&1 &&
+   diff <(norm2 <stu/log | sed 's/stu\.out/OUT/g') \
+        <(norm2 <stp/log | sed 's/stp\.out/OUT/g') >/dev/null 2>&1; then
+  ok
+else
+  bad "streaming extract output (rc $ru/$rp)"
+fi
+
 # ---- add stamps the transaction with UTC, like upstream ----
 rm -rf tzd
 mkdir tzd

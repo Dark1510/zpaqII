@@ -171,8 +171,44 @@ begin
   Result := (Int64(1) shl (20 + n)) - 4096;
 end;
 
+{ Sort key used by add (upstream): last path component, first 5 extension
+  bytes case insensitive, then descending size rounded to 16 KiB. }
+function AddSortKey(const name: string; size: Int64): Int64;
+var
+  sp, i: Integer;
+  cc, ch: Int64;
+begin
+  sp := 0;
+  cc := 0;
+  for i := 1 to Length(name) do
+  begin
+    ch := Ord(name[i]);
+    if (ch >= Ord('A')) and (ch <= Ord('Z')) then Inc(ch, Ord('a') - Ord('A'));
+    if ch = Ord('/') then
+    begin
+      sp := 0;
+      cc := 0;
+    end
+    else if ch = Ord('.') then
+    begin
+      sp := 8;
+      cc := 0;
+    end
+    else if sp > 3 then
+    begin
+      Dec(sp);
+      Inc(cc, ch shl (sp * 8));
+    end;
+  end;
+  i := 0;
+  if size shr 14 >= (Int64(1) shl 24) then i := (1 shl 24) - 1
+  else i := Integer(size shr 14);
+  Result := cc + (Int64(1) shl 24) - i - 1;
+end;
+
 function AddStreaming(const archive, method, key: string;
-                      files: TStringList): Integer;
+                      files: TStringList; trDate: Int64;
+                      nthreads, sum: Integer): Integer;
 var
   out: TOutputArchive;
   salt: array[0..31] of AnsiChar;
@@ -187,7 +223,19 @@ var
   nr, first: Integer;
   comment, fn: string;
   cptr: PAnsiChar;
+  headerPos, totalSize, totalDone: Int64;
+  nfiles: Cardinal;
+  errs, nt: Integer;
+  reader: TJidac;
+  order: array of Integer;
+  keys: array of Int64;
+  tmpIdx, si, sj: Integer;
 begin
+  headerPos := 0;
+  totalSize := 0;
+  totalDone := 0;
+  nt := nthreads;
+  if nt < 1 then nt := CPUCount;
   saltPtr := nil;
   if key <> '' then
   begin
@@ -198,27 +246,84 @@ begin
       saltPtr := @salt[0];
     end;
   end;
+  if FileExistsUTF8(archive) then
+  begin
+    { Read it first: the banner and the append offset come from the scan. }
+    reader := TJidac.Create(archive, key, DEFAULT_VERSION);
+    try
+      for i := 0 to files.Count - 1 do reader.files.Add(files[i]);
+      headerPos := reader.ReadArchive(errs, nfiles);
+    finally
+      reader.Free;
+    end;
+    Write('Updating ');
+  end
+  else
+    Write('Creating ');
+  Write(archive, ' at offset ', Format('%1.0f', [headerPos + 0.0]), ' + 0');
+  WriteLn;
+
+  for i := 0 to files.Count - 1 do
+  begin
+    FileInfo(files[i], date, size, attr, isDir);
+    if date <> 0 then Inc(totalSize, size);
+  end;
+  WriteLn('Adding ', Format('%1.6f', [totalSize / 1000000.0]), ' MB in ',
+          files.Count, ' files -method ', method, ' -threads ', nt, ' at ',
+          DateToString(trDate), '.');
+
+  { Upstream adds the files in sortkey order (extension, then size). }
+  SetLength(order, files.Count);
+  SetLength(keys, files.Count);
+  for i := 0 to files.Count - 1 do
+  begin
+    order[i] := i;
+    FileInfo(files[i], date, size, attr, isDir);
+    keys[i] := AddSortKey(files[i], size);
+  end;
+  for si := 1 to High(order) do
+  begin
+    tmpIdx := order[si];
+    sj := si - 1;
+    while (sj >= 0) and ((keys[order[sj]] > keys[tmpIdx]) or
+          ((keys[order[sj]] = keys[tmpIdx]) and
+           (files[order[sj]] > files[tmpIdx]))) do
+    begin
+      order[sj + 1] := order[sj];
+      Dec(sj);
+    end;
+    order[sj + 1] := tmpIdx;
+  end;
+
   out := TOutputArchive.Create(archive, key, saltPtr, 0);
   bs := BlockSizeOf(method);
   try
     w := OutputWriter(out);
     b := zq_buf_new(bs + 4096 - 128);
     try
-      for i := 0 to files.Count - 1 do
+      for si := 0 to High(order) do
       begin
+        i := order[si];
         FileInfo(files[i], date, size, attr, isDir);
         if date = 0 then
         begin
           WriteLn(StdErr, 'zpaqii: cannot read ', files[i]);
           Exit(1);
         end;
+        PrintProgress(totalSize, totalDone, sum);
+        if sum <= 0 then
+          WriteLn('+ ', files[i], ' ', size);
         zq_buf_resize(b, 0);
         fs := TFileStream.Create(files[i], fmOpenRead or fmShareDenyNone);
         try
           first := 1;
           repeat
             nr := fs.Read(tmp, 4096);
-            if nr > 0 then zq_buf_write(b, @tmp[0], nr);
+            if nr > 0 then
+            begin
+              zq_buf_write(b, @tmp[0], nr);
+              Inc(totalDone, nr);
+            end;
             if (nr = 0) or (Int64(zq_buf_size(b)) + 4096 > bs) then
             begin
               fn := '';
@@ -246,13 +351,32 @@ begin
     finally
       zq_buf_free(b);
     end;
+    WriteLn(Format('%1.0f + (%1.0f -> %1.0f) = %1.0f',
+                   [headerPos + 0.0, totalSize + 0.0,
+                    out.Tell() - headerPos + 0.0, out.Tell() + 0.0]));
   finally
     out.Free;
   end;
   Result := 0;
 end;
 
-function ExtractStreaming(j: TJidac; listOnly: Boolean): Integer;
+procedure NullPut(ctx: Pointer; c: LongInt); cdecl;
+begin
+end;
+
+procedure NullWrite(ctx: Pointer; buf: PAnsiChar; n: LongInt); cdecl;
+begin
+end;
+
+function NullWriter: TZqWriter;
+begin
+  Result.put := @NullPut;
+  Result.write := @NullWrite;
+  Result.ctx := nil;
+end;
+
+function ExtractStreaming(j: TJidac; listOnly, force: Boolean;
+                          sum: Integer): Integer;
 var
   inArc: TInputArchive;
   r: TZqReader;
@@ -263,13 +387,24 @@ var
   dw: TZqWriter;
   haveFile: Boolean;
   total: Int64;
-  rc: Integer;
+  rc, idx, segments, totalFiles, nt: Integer;
+  totalSize: Int64;
+  dtr: TDT;
 begin
   inArc := TInputArchive.Create(j.archive, j.password);
   d := zq_d_new;
   fd := nil;
   total := 0;
   haveFile := False;
+  segments := 0;
+  if not listOnly then
+  begin
+    j.PrepareExtract(force, False, totalFiles, totalSize);
+    nt := j.threads;
+    if nt < 1 then nt := CPUCount;
+    WriteLn('Extracting ', Format('%1.6f', [totalSize / 1000000.0]),
+            ' MB in ', totalFiles, ' files -threads ', nt);
+  end;
   try
     r := InputReader(inArc);
     zq_d_set_input(d, r);
@@ -292,17 +427,33 @@ begin
         if zq_d_read_comment(d, nil) < 0 then Fail(string(zq_last_error));
 
         outPath := string(GName);
-        if not listOnly and (outPath <> '') and
-           j.IsSelected(outPath, False) then
+        if not listOnly then
         begin
-          outPath := j.Rename(outPath);
-          MakePath(outPath);
-          if fd <> nil then FreeAndNil(fd);
-          fd := TFileData.Create;
-          fd.Stream := TFileStream.Create(outPath, fmCreate);
-          haveFile := True;
-          dw := MakeWriter(fd);
-          zq_d_set_output(d, dw);
+          Inc(segments);
+          { A segment with an empty name continues the previous file. }
+          idx := -1;
+          if outPath <> '' then idx := j.dt.IndexOf(outPath);
+          if (outPath = '') and (segments > 1) then
+            idx := -1
+          else if (outPath <> '') and (idx >= 0) and
+             (TDT(j.dt.Objects[idx]).data = 0) then
+          begin
+            if sum <= 0 then WriteLn('> ', j.Rename(outPath));
+            outPath := j.Rename(outPath);
+            MakePath(outPath);
+            if fd <> nil then FreeAndNil(fd);
+            fd := TFileData.Create;
+            fd.Stream := TFileStream.Create(outPath, fmCreate);
+            haveFile := True;
+            dw := MakeWriter(fd);
+            zq_d_set_output(d, dw);
+          end
+          else if (outPath <> '') or (segments = 1) then
+          begin
+            if fd <> nil then FreeAndNil(fd);
+            dw := NullWriter;
+            zq_d_set_output(d, dw);
+          end;
         end;
 
         if zq_d_decompress(d, -1) < 0 then Fail(string(zq_last_error));
@@ -317,6 +468,8 @@ begin
     zq_d_free(d);
     inArc.Free;
   end;
+  if segments > 0 then
+    WriteLn(segments, ' streaming segments extracted');
   Result := 0;
 end;
 
@@ -356,7 +509,7 @@ begin
   else if j.repack <> '' then
     Result := j.RepackSelected(force)   { errors out, like upstream }
   else
-    Result := ExtractStreaming(j, False);
+    Result := ExtractStreaming(j, False, force, j.summary);
 end;
 
 { -until N: N-th update, -N: count from the end, or a date.  Follows
@@ -426,6 +579,7 @@ var
 
 begin
   GStart := MTime;
+  ZqStartTime := GStart;
   DefaultFormatSettings.DecimalSeparator := '.';
   WriteLn('zpaq v7.15 journaling archiver, compiled ', {$I %DATE%});
   if ParamCount < 1 then
@@ -621,7 +775,8 @@ begin
       files.CaseSensitive := True;
       files.Sort;
       if (method <> '') and (method[1] = 's') then
-        Finish(AddStreaming(archive, method, key, files));
+        Finish(AddStreaming(archive, method, key, files, dateVal, nthreads,
+                            summary));
       if not dateSet then
       begin
         { testing hook: ZPAQII_NOW freezes the clock (unix seconds) }
@@ -635,9 +790,14 @@ begin
         jadd := TJidac.Create(archive, key, DEFAULT_VERSION);
         jadd.fragment := frag;
         jadd.noattributes := noattrs;
+        jadd.summary := summary;
         jadd.threads := nthreads;
         jadd.indexName := indexName;
         for i := 0 to files.Count - 1 do jadd.files.Add(files[i]);
+        for i := 0 to tofiles.Count - 1 do jadd.tofiles.Add(tofiles[i]);
+        for i := 0 to onlyfiles.Count - 1 do jadd.onlyfiles.Add(onlyfiles[i]);
+        for i := 0 to notfiles.Count - 1 do jadd.notfiles.Add(notfiles[i]);
+        jadd.nottype := nottype;
         try
           rc := jadd.Add(files, method, dateVal, force, errs);
           if errs <> 0 then rc := 1;

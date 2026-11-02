@@ -68,7 +68,10 @@ type
     function GetDT(const fn: string): TDT;
     function LoadBlock(const arcName, password: string; nb: Integer;
                        osb: TZqBuf; out bad: Boolean): Boolean;
+    procedure ScanInto(edt: TStringList; const name: string);
   public
+    fBlockFiles: array of array of Integer;
+    fNeedCount: array of Cardinal;
     archive: string;
     password: string;
     version: Int64;
@@ -112,12 +115,37 @@ type
     function Add(const addFiles: TStringList; const method: string; date: Int64;
                  force: Boolean; out errors: Integer): Integer;
     function FindBlockFor(frag: Cardinal): Integer;
+    procedure PrepareExtract(force, testOnly: Boolean;
+                             out totalFiles: Integer; out totalSize: Int64);
   end;
+
+{ -summary progress prefix: percentage and ETA since the program started }
+procedure PrintProgress(ts, td: Int64; sum: Integer);
+var ZqStartTime: Int64 = 0;
 
 const
   DEFAULT_VERSION = Int64(99999999999999);
 
 implementation
+
+procedure PrintProgress(ts, td: Int64; sum: Integer);
+var
+  eta: Double;
+begin
+  if td > ts then td := ts;
+  if td >= 1000000 then
+  begin
+    eta := (MTime - ZqStartTime) * (ts - td) / (td + 1.0);
+    Write(Format('%5.2f%% %d:%.2d:%.2d ',
+                 [td * 100.0 / (ts + 0.5), Trunc(eta / 3600000),
+                  Trunc(eta / 60000) mod 60, Trunc(eta / 1000) mod 60]));
+    if sum > 0 then
+    begin
+      Write(#13);
+      Flush(Output);
+    end;
+  end;
+end;
 
 type
   TNameSink = class
@@ -191,7 +219,7 @@ type
                        nthreads: Integer);
     destructor Destroy; override;
     procedure Start;
-    function Get(nb: Integer; out bad: Boolean): PAnsiChar;
+    function Get(nb: Integer; out bad: Boolean; out size: Int64): PAnsiChar;
   end;
 
   TCompPool = class;
@@ -632,12 +660,13 @@ begin
   end;
 end;
 
-function TDecPool.Get(nb: Integer; out bad: Boolean): PAnsiChar;
+function TDecPool.Get(nb: Integer; out bad: Boolean; out size: Int64): PAnsiChar;
 var
   s: TDecSlot;
   found: Boolean;
 begin
   bad := False;
+  size := 0;
   while True do
   begin
     fLock.Acquire;
@@ -664,12 +693,14 @@ begin
       if not fOwner.LoadBlock(fOwner.archive, fOwner.password, nb, fSync, bad)
       then
         Exit(nil);
+      size := Int64(zq_buf_size(fSync));
       Exit(zq_buf_data(fSync));
     end;
     if s.done then
     begin
       bad := s.bad;
       if not s.ok then Exit(nil);
+      size := Int64(zq_buf_size(s.buf));
       Exit(zq_buf_data(s.buf));
     end;
     s.ev.WaitFor(INFINITE);
@@ -1430,6 +1461,10 @@ begin
             fn := lastfile;
             if all > 0 then
               fn := Itos(Int64(Length(ver)) - 1, all) + '/' + fn;
+            { Upstream only counts and records streaming segments that the
+              selection matches (dt is the working set of this command). }
+            if IsSelected(fn, False) then
+            begin
             dtr := GetDT(fn);
             if (Length(fnameSink.s) > 0) or first then
             begin
@@ -1441,6 +1476,7 @@ begin
             end;
             SetLength(dtr.ptr, Length(dtr.ptr) + 1);
             dtr.ptr[High(dtr.ptr)] := Cardinal(Length(ht));
+            end;
             if (segs = 0) or (Length(blocks) = 0) then
             begin
               blk := Default(TBlockInfo);
@@ -1811,155 +1847,305 @@ begin
   Result := 0;
 end;
 
-function TJidac.Extract(force: Boolean; testOnly: Boolean): Integer;
+{ Label the entries to extract (upstream's loop): decides dt[].data (-1 skip,
+  0 extract) and prints the "="/"?" lines and the skipped count. }
+procedure TJidac.PrepareExtract(force, testOnly: Boolean;
+                                out totalFiles: Integer; out totalSize: Int64);
 var
-  i, nb, k, nt: Integer;
+  i, j, k, nb: Integer;
   dtr: TDT;
-  frag: Cardinal;
-  offsetInBlock, j: Int64;
-  ofsFrag: Integer;
-  outPath: string;
-  fo: TFileStream;
-  blockData: PAnsiChar;
-  curBlock: Integer;
-  osb: TZqBuf;
-  bad: Boolean;
-  errors: Integer;
-  needed: array of Integer;
-  needFlags: array of Boolean;
-  pool: TDecPool;
+  fn: string;
+  isdir: Boolean;
+  skipped: Integer;
 begin
-  Result := 0;
-  errors := 0;
-  curBlock := -1;
-  osb := zq_buf_new(1 shl 16);
-  pool := nil;
-  try
-    { Blocks that a selected file needs, ascending, for the prefetcher. }
-    nt := threads;
-    if nt < 1 then nt := CPUCount;
-    if (nt > 1) and (Length(blocks) > 1) then
-    begin
-      SetLength(needFlags, Length(blocks));
-      for i := 0 to dt.Count - 1 do
-      begin
-        dtr := TDT(dt.Objects[i]);
-        if dtr.date = 0 then Continue;
-        if not IsSelected(dt[i], False) then Continue;
-        for k := 0 to High(dtr.ptr) do
-        begin
-          nb := FindBlockFor(dtr.ptr[k]);
-          if (nb >= 0) and (not needFlags[nb]) then needFlags[nb] := True;
-        end;
-      end;
-      SetLength(needed, 0);
-      for i := 0 to High(needFlags) do
-        if needFlags[i] then
-        begin
-          SetLength(needed, Length(needed) + 1);
-          needed[High(needed)] := i;
-        end;
-      if Length(needed) > 1 then
-      begin
-        pool := TDecPool.Create(Self, needed, nt);
-        pool.Start;
-      end;
-    end;
+  totalFiles := 0;
+  totalSize := 0;
+  skipped := 0;
+  { ---- Label the files and find the blocks they need (upstream) ---- }
+  SetLength(fBlockFiles, Length(blocks));
+  SetLength(fNeedCount, Length(blocks));
     for i := 0 to dt.Count - 1 do
     begin
       dtr := TDT(dt.Objects[i]);
-      if dtr.date = 0 then Continue;
-      { selection: files..., -only, -not.  Extract tests the stored name. }
-      if not IsSelected(dt[i], False) then Continue;
-      if (dt[i] <> '') and (dt[i][Length(dt[i])] = '/') then
+      dtr.data := -1;
+      if (dtr.date = 0) or (dt[i] = '') then Continue;
+      fn := Rename(dt[i]);
+      isdir := dt[i][Length(dt[i])] = '/';
+      if (not testOnly) and force and (not isdir) and Equal(dtr, fn) then
       begin
-        if not testOnly then MakePath(Rename(dt[i]), dtr.date, dtr.attr);
-        Continue;
+        if summary <= 0 then WriteLn('= ', fn);
+        CloseFileAttrs(fn, dtr.date, dtr.attr);
+        Inc(skipped);
+      end
+      else if (not testOnly) and (not force) and FileExistsUTF8(fn) then
+      begin
+        if summary <= 0 then WriteLn('? ', fn);
+        Inc(skipped);
+      end
+      else if isdir then
+        dtr.data := 0
+      else if Length(blocks) > 0 then
+      begin
+        dtr.data := 0;
+        Inc(totalFiles);
+        Inc(totalSize, dtr.size);
+        for j := 0 to High(dtr.ptr) do
+        begin
+          k := dtr.ptr[j];
+          if (k = 0) or (k >= Cardinal(Length(ht))) or (ht[k].usize < -1) then
+          begin
+            WriteLn(StdErr, dt[i], ': bad frag IDs, skipping...');
+            dtr.data := -1;
+            Break;
+          end;
+          nb := FindBlockFor(k);
+          if nb < 0 then Continue;
+          if (Length(fBlockFiles[nb]) = 0) or
+             (fBlockFiles[nb][High(fBlockFiles[nb])] <> i) then
+          begin
+            SetLength(fBlockFiles[nb], Length(fBlockFiles[nb]) + 1);
+            fBlockFiles[nb][High(fBlockFiles[nb])] := i;
+          end;
+          if Cardinal(k - blocks[nb].start + 1) > fNeedCount[nb] then
+            fNeedCount[nb] := k - blocks[nb].start + 1;
+        end;
       end;
-      outPath := Rename(dt[i]);
-      if not testOnly then
+    end;
+  if (not force) and (skipped > 0) then
+    WriteLn(skipped, ' ?existing files skipped (-force overwrites).');
+  if force and (skipped > 0) then
+    WriteLn(skipped, ' =identical files skipped.');
+end;
+
+
+function TJidac.Extract(force: Boolean; testOnly: Boolean): Integer;
+var
+  i, j, nb, b, k, idx: Integer;
+  dtr: TDT;
+  fn: string;
+  isdir: Boolean;
+  skipped, totalFiles, extracted, errors, nt: Integer;
+  totalSize, totalDone: Int64;
+  blockFiles: array of array of Integer;
+  needCount: array of Cardinal;
+  boff: array of Int64;
+  bdata: PAnsiChar;
+  curFile: TFileStream;
+  curIdx: Integer;
+  offs, q, usize2: Int64;
+  bad: Boolean;
+  osb: TZqBuf;
+  pool: TDecPool;
+  needed: array of Integer;
+  needFlags: array of Boolean;
+begin
+  Result := 0;
+  errors := 0;
+  skipped := 0;
+  totalFiles := 0;
+  totalSize := 0;
+  totalDone := 0;
+  curFile := nil;
+  curIdx := -1;
+  osb := zq_buf_new(1 shl 16);
+  pool := nil;
+  try
+    PrepareExtract(force, testOnly, totalFiles, totalSize);
+
+    nt := threads;
+    if nt < 1 then nt := CPUCount;
+    WriteLn('Extracting ', Format('%1.6f', [totalSize / 1000000.0]),
+            ' MB in ', totalFiles, ' files -threads ', nt);
+
+    { ---- Prefetch the blocks that the selected files need ---- }
+    SetLength(needFlags, Length(blocks));
+    SetLength(needed, 0);
+    for b := 0 to High(blocks) do
+      if Length(fBlockFiles[b]) > 0 then
       begin
-        MakePath(outPath);
-        fo := TFileStream.Create(outPath, fmCreate);
+        needFlags[b] := True;
+        SetLength(needed, Length(needed) + 1);
+        needed[High(needed)] := b;
+      end;
+    if (nt > 1) and (Length(needed) > 1) then
+    begin
+      pool := TDecPool.Create(Self, needed, nt);
+      pool.Start;
+    end;
+
+    { ---- Decompress block by block and write the files ---- }
+    for b := 0 to High(blocks) do
+    begin
+      if Length(fBlockFiles[b]) = 0 then Continue;
+      if fNeedCount[b] < 1 then Continue;
+      if pool <> nil then
+      begin
+        bdata := pool.Get(b, bad, usize2);
+        if bdata <> nil then q := usize2;
       end
       else
-        fo := nil;
-      try
-        for k := 0 to High(dtr.ptr) do
+      begin
+        if not LoadBlock(archive, password, b, osb, bad) then
         begin
-          frag := dtr.ptr[k];
-          if (frag = 0) or (frag >= Cardinal(Length(ht))) then Continue;
-          nb := FindBlockFor(frag);
-          if nb < 0 then
+          WriteLn(StdErr, 'cannot decompress block ', b);
+          Inc(errors);
+          Continue;
+        end;
+        bdata := zq_buf_data(osb);
+        q := Int64(zq_buf_size(osb));
+      end;
+      if bdata = nil then
+      begin
+        WriteLn(StdErr, 'cannot decompress block ', b);
+        Inc(errors);
+        Continue;
+      end;
+      if bad then
+      begin
+        WriteLn(StdErr, 'bad checksum in block ', b);
+        Inc(errors);
+      end;
+
+      { Offset of each fragment inside the decompressed block }
+      SetLength(boff, fNeedCount[b]);
+      offs := 0;
+      for k := 0 to Int64(fNeedCount[b]) - 1 do
+      begin
+        boff[k] := offs;
+        if ht[blocks[b].start + Cardinal(k)].usize > 0 then
+          Inc(offs, ht[blocks[b].start + Cardinal(k)].usize);
+      end;
+      { Upstream prints the bytes the decompresser produced.  When only part of
+        the block is needed it stops at the fragment data, without the trailer. }
+      if fNeedCount[b] < blocks[b].frags then q := offs;
+      PrintProgress(totalSize, totalDone, summary);
+      if summary <= 0 then
+        WriteLn('[', blocks[b].start, '..',
+                Int64(blocks[b].start) + Int64(fNeedCount[b]) - 1,
+                '] -> ', q);
+
+      for idx := 0 to High(fBlockFiles[b]) do
+      begin
+        i := fBlockFiles[b][idx];
+        dtr := TDT(dt.Objects[i]);
+        if (dtr.date = 0) or (dtr.data < 0) or
+           (dtr.data >= Length(dtr.ptr)) then Continue;
+        offs := 0;
+        for j := 0 to High(dtr.ptr) do
+        begin
+          k := dtr.ptr[j];
+          if Cardinal(k) < blocks[b].start then
           begin
-            WriteLn(StdErr, 'missing block for fragment ', frag);
-            Inc(errors);
+            if ht[k].usize > 0 then Inc(offs, ht[k].usize);
             Continue;
           end;
-          if nb <> curBlock then
+          if Cardinal(k) >= blocks[b].start + fNeedCount[b] then Break;
+
+          { Open (or reopen) the output file }
+          if (curIdx <> i) or (curFile = nil) then
           begin
-            if pool <> nil then
+            if curFile <> nil then
             begin
-              blockData := pool.Get(nb, bad);
-              if blockData = nil then
+              curFile.Free;
+              curFile := nil;
+            end;
+            if dtr.data = 0 then
+            begin
+              if summary <= 0 then
               begin
-                WriteLn(StdErr, 'cannot decompress block ', nb);
-                Inc(errors);
-                curBlock := -1;
-                Continue;
+                PrintProgress(totalSize, totalDone, summary);
+                WriteLn('> ', Rename(dt[i]));
+              end;
+              if not testOnly then
+              begin
+                MakePath(Rename(dt[i]));
+                curFile := TFileStream.Create(Rename(dt[i]), fmCreate);
               end;
             end
-            else
-            begin
-              if not LoadBlock(archive, password, nb, osb, bad) then
-              begin
-                WriteLn(StdErr, 'cannot decompress block ', nb);
-                Inc(errors);
-                curBlock := -1;
-                Continue;
-              end;
-              blockData := zq_buf_data(osb);
-            end;
-            if bad then
-            begin
-              WriteLn(StdErr, 'bad checksum in block ', nb);
-              Inc(errors);
-            end;
-            curBlock := nb;
-            ofsFrag := blocks[nb].start;
-            offsetInBlock := 0;
-          end
-          else if frag < Cardinal(ofsFrag) then
-          begin
-            ofsFrag := blocks[nb].start;
-            offsetInBlock := 0;
+            else if not testOnly then
+              curFile := TFileStream.Create(Rename(dt[i]), fmOpenReadWrite);
+            curIdx := i;
           end;
-          { Running prefix sum: fragments of a file are ascending, so this is
-            amortised O(1) instead of a scan from the block start. }
-          while ofsFrag < Int64(frag) do
+
+          usize2 := ht[k].usize;
+          if (not testOnly) and (curFile <> nil) and (usize2 > 0) then
           begin
-            Inc(offsetInBlock, ht[ofsFrag].usize);
-            Inc(ofsFrag);
+            curFile.Seek(offs, soBeginning);
+            curFile.Write((bdata + boff[k - blocks[b].start])^, usize2);
           end;
-          if GetEnvironmentVariable('ZQ_DBG') <> '' then
-            WriteLn(StdErr, 'frag=', frag, ' nb=', nb, ' cur=', curBlock,
-                    ' ofsFrag=', ofsFrag, ' off=', offsetInBlock,
-                    ' size=', ht[frag].usize);
-          if (not testOnly) and (ht[frag].usize > 0) then
-            fo.Write((blockData + offsetInBlock)^, ht[frag].usize);
+          Inc(dtr.data);
+          if usize2 > 0 then
+          begin
+            Inc(offs, usize2);
+            Inc(totalDone, usize2);
+          end;
         end;
-      finally
-        if fo <> nil then fo.Free;
+
+        { Last fragment: close and set the date and attributes }
+        if (dtr.data >= Length(dtr.ptr)) and (curIdx = i) then
+        begin
+          if curFile <> nil then
+          begin
+            curFile.Free;
+            curFile := nil;
+          end;
+          curIdx := -1;
+          if not testOnly then
+            CloseFileAttrs(Rename(dt[i]), dtr.date, dtr.attr);
+        end;
       end;
-      if not testOnly then CloseFileAttrs(outPath, dtr.date, dtr.attr);
     end;
+
+    { ---- Directories and read-only attributes ---- }
+    if not testOnly then
+    begin
+      for i := 0 to dt.Count - 1 do
+      begin
+        dtr := TDT(dt.Objects[i]);
+        if (dtr.data >= 0) and (dtr.date <> 0) and (dt[i] <> '') then
+        begin
+          fn := Rename(dt[i]);
+          if dt[i][Length(dt[i])] = '/' then
+            MakePath(fn, dtr.date, dtr.attr)
+          else if (dtr.attr and $1ff) = Ord('w') + 256 then
+            CloseFileAttrs(fn, 0, dtr.attr);
+        end;
+      end;
+    end;
+
+    { ---- Report failed extractions (upstream) ---- }
+    extracted := 0;
+    errors := 0;
+    for i := 0 to dt.Count - 1 do
+    begin
+      dtr := TDT(dt.Objects[i]);
+      fn := Rename(dt[i]);
+      if (dtr.data >= 0) and (dtr.date <> 0) and (fn <> '') and
+         (fn[Length(fn)] <> '/') then
+      begin
+        Inc(extracted);
+        if Cardinal(dtr.data) <> Cardinal(Length(dtr.ptr)) then
+        begin
+          if errors = 0 then
+          begin
+            WriteLn;
+            WriteLn(StdErr, 'Failed (extracted/total fragments, file):');
+          end;
+          Inc(errors);
+          WriteLn(StdErr, dtr.data, '/', Length(dtr.ptr), ' ', fn);
+        end;
+      end;
+    end;
+    if errors > 0 then
+      WriteLn(StdErr, 'Extracted ', extracted - errors, ' of ', extracted,
+              ' files OK (', errors, ' errors)');
   finally
+    if curFile <> nil then curFile.Free;
     if pool <> nil then pool.Free;
     zq_buf_free(osb);
   end;
-  Result := errors;
+  Result := Ord(errors > 0);
 end;
-
 
 { ------------------------------------------------------------------ }
 { add (journaling)                                                    }
@@ -1968,6 +2154,7 @@ end;
 type
   TEdtEntry = class
     date, size, attr, sortkey: Int64;
+    data: Integer;          { 0 = not compressed in this update, 1 = added }
     ptr: array of Cardinal;
   end;
 
@@ -2062,7 +2249,7 @@ begin
   end;
 end;
 
-procedure ScanInto(edt: TStringList; const name: string);
+procedure TJidac.ScanInto(edt: TStringList; const name: string);
 var
   date, size, attr: Int64;
   isDir: Boolean;
@@ -2072,24 +2259,36 @@ var
   fn, sub, nm: string;
 begin
   FileInfo(name, date, size, attr, isDir);
-  if date = 0 then Exit;
+  if date = 0 then
+  begin
+    { upstream's scandir: perror() for a file that cannot be stat'ed }
+    WriteLn(StdErr, name, ': ', SysErrorMessage(fpGetErrno));
+    Exit;
+  end;
   nm := name;
   while (Length(nm) > 1) and (nm[Length(nm)] = '/') do
     SetLength(nm, Length(nm) - 1);
   if isDir then
   begin
     fn := nm + '/';
-    idx := edt.IndexOf(fn);
-    if idx >= 0 then e := TEdtEntry(edt.Objects[idx])
-    else
+    { upstream's addfile(): an entry is only recorded when selected; the
+      directory itself is always traversed. }
+    if IsSelected(fn, False) then
     begin
-      e := TEdtEntry.Create;
-      edt.AddObject(fn, e);
+      idx := edt.IndexOf(fn);
+      if idx >= 0 then e := TEdtEntry(edt.Objects[idx])
+      else
+      begin
+        e := TEdtEntry.Create;
+        edt.AddObject(fn, e);
+      end;
+      e.date := date;
+      e.size := 0;
+      e.attr := attr;
+      e.sortkey := 0;
+      e.data := 0;
+      SetLength(e.ptr, 0);
     end;
-    e.date := date;
-    e.size := 0;
-    e.attr := attr;
-    e.sortkey := 0;
     if FindFirst(fn + '*', faAnyFile, sr) = 0 then
     begin
       repeat
@@ -2102,7 +2301,7 @@ begin
       FindClose(sr);
     end;
   end
-  else
+  else if IsSelected(nm, False) then
   begin
     idx := edt.IndexOf(nm);
     if idx >= 0 then e := TEdtEntry(edt.Objects[idx])
@@ -2115,6 +2314,8 @@ begin
     e.size := size;
     e.attr := attr;
     e.sortkey := 0;
+    e.data := 0;
+    SetLength(e.ptr, 0);
   end;
 end;
 
@@ -2132,10 +2333,17 @@ var
   n, chunk: Int64;
 begin
   Result := False;
+  { No file (or unreadable): not equal, as upstream's fopen() check. }
+  if not FileExistsUTF8(fn) then Exit;
+  try
+    fs := TFileStream.Create(fn, fmOpenRead or fmShareDenyNone);
+  except
+    Exit;
+  end;
   osb := zq_buf_new(1 shl 16);
   cur := -1;
   try
-    fs := TFileStream.Create(fn, fmOpenRead or fmShareDenyNone);
+    fs.Position := 0;
     try
       for k := 0 to High(dtr.ptr) do
       begin
@@ -2221,6 +2429,47 @@ var
     lstat[High(lstat)] := ast;
     lref[High(lref)] := aref;
     lskip[High(lskip)] := False;
+  end;
+
+  { Fragment list of entry i (external files have none). }
+  function RefPtr(i: Integer): TDT;
+  begin
+    if lref[i] >= 0 then Result := TDT(dt.Objects[lref[i]]) else Result := nil;
+  end;
+
+  { Compare two fragment lists like std::vector's operator<. }
+  function PtrCmp(pa, pb: TDT): Integer;
+  var
+    x, y, k: Integer;
+  begin
+    x := 0;
+    y := 0;
+    if pa <> nil then x := Length(pa.ptr);
+    if pb <> nil then y := Length(pb.ptr);
+    k := 0;
+    while (k < x) and (k < y) do
+    begin
+      if pa.ptr[k] <> pb.ptr[k] then
+      begin
+        if pa.ptr[k] < pb.ptr[k] then Exit(-1) else Exit(1);
+      end;
+      Inc(k);
+    end;
+    if x < y then Exit(-1);
+    if x > y then Exit(1);
+    Result := 0;
+  end;
+
+  { compareFragmentList(): size desc, fragment list, status, name. }
+  function LessEntry(a, b: Integer): Boolean;
+  var
+    r: Integer;
+  begin
+    if lsize[a] <> lsize[b] then Exit(lsize[a] > lsize[b]);
+    r := PtrCmp(RefPtr(a), RefPtr(b));
+    if r <> 0 then Exit(r < 0);
+    if lstat[a] <> lstat[b] then Exit(lstat[a] < lstat[b]);
+    Result := names[a] < names[b];
   end;
 
   procedure DirSizes(list: TStringList);
@@ -2313,12 +2562,12 @@ begin
     end;
     if summary > 0 then
     begin
-      { insertion sort by descending size }
+      { insertion sort with upstream's compareFragmentList }
       for i := 1 to High(order) do
       begin
         idx := order[i];
         j := i - 1;
-        while (j >= 0) and (lsize[order[j]] < lsize[idx]) do
+        while (j >= 0) and LessEntry(idx, order[j]) do
         begin
           order[j + 1] := order[j];
           Dec(j);
@@ -2326,6 +2575,16 @@ begin
         order[j + 1] := idx;
       end;
       if Length(order) > summary then SetLength(order, summary);
+      { Mark duplicates: same fragment list as the previous entry. }
+      for j := 1 to High(order) do
+      begin
+        i := order[j];
+        if (ldate[i] <> 0) and (names[i] <> '') and
+           (names[i][Length(names[i])] <> '/') and (lref[i] >= 0) and
+           (Length(TDT(dt.Objects[lref[i]]).ptr) > 0) and
+           (PtrCmp(RefPtr(order[j - 1]), RefPtr(i)) = 0) then
+          lstat[i] := '^';
+      end;
     end;
 
     usize := 0;
@@ -2339,6 +2598,7 @@ begin
         '#': Inc(mismatches);
         '-': Inc(internal);
         '+': Inc(external);
+        '^': Inc(dups);
       end;
       if Pos(st, nottype) > 0 then Continue;
       if (names[i] <> '') and (names[i][Length(names[i])] <> '/') then
@@ -2415,8 +2675,6 @@ begin
         end;
       end;
     end;
-    dups := 0;
-
     WriteLn;
     WriteLn(Format('%1.6f MB of %1.6f MB (%d files) shown',
                    [usize / 1000000.0, allsize / 1000000.0, nfiles]));
@@ -2498,7 +2756,8 @@ var
   htsize: Cardinal;
   nfilesC: Cardinal;
   jdcComment: AnsiString;
-  outName, part0, partname, readSrc: string;
+  outName, part0, partname, readSrc, newname: string;
+  ntAdd: Integer;
   idxArc: TOutputArchive;
   wIdx: TZqWriter;
   idxInit: Boolean;
@@ -2681,7 +2940,7 @@ begin
   for i := 0 to edt.Count - 1 do
   begin
     e := TEdtEntry(edt.Objects[i]);
-    idx := dt.IndexOf(edt[i]);
+    idx := dt.IndexOf(Rename(edt[i]));
     if idx >= 0 then TDT(dt.Objects[idx]).data := 1;
     if (e.date <> 0) and (edt[i] <> '') and (edt[i][Length(edt[i])] <> '/') and
        (force or (idx < 0) or (e.date <> TDT(dt.Objects[idx]).date) or
@@ -2714,6 +2973,7 @@ begin
       if s15 >= (Int64(1) shl 24) then s15 := (Int64(1) shl 24) - 1;
       Inc(cc, (Int64(1) shl 24) - s15 - 1);
       e.sortkey := cc;
+      e.data := 1;
       vf.AddObject(edt[i], e);
     end;
   end;
@@ -2739,11 +2999,20 @@ begin
     Inc(i);
   end;
 
+  { Resolved thread count, as printed by upstream }
+  ntAdd := threads;
+  if ntAdd < 1 then ntAdd := CPUCount;
+  WriteLn('Adding ', Format('%1.6f', [total_size / 1000000.0]), ' MB in ',
+          vf.Count, ' files -method ', m, ' -threads ', ntAdd, ' at ',
+          DateToString(date), '.');
+
   { Adjust date to keep versions sequential }
   if (Length(ver) > 0) and (ver[High(ver)].lastdate >= date) then
   begin
-    date := DecimalTime(UnixTime(ver[High(ver)].lastdate) + 1);
-    WriteLn(StdErr, 'Warning: adjusting date to ', DateToString(date));
+    j := Int64(UnixTime(ver[High(ver)].lastdate) + 1);
+    WriteLn(StdErr, 'Warning: adjusting date from ', DateToString(date),
+            ' to ', DateToString(DecimalTime(j)));
+    date := DecimalTime(j);
   end;
 
   if Length(ht) = 0 then
@@ -2941,6 +3210,11 @@ begin
               m2 := m2 + ',' +
                     Itos(Int64(redundancy) div (Int64(zq_buf_size(sb)) div 256 + 1)) +
                     ',' + Itos(Ord(exe > frags) * 2 + Ord(text > frags));
+            PrintProgress(total_size, total_done, summary);
+            if summary <= 0 then
+              WriteLn('[', Length(ht) - Int64(frags), '..',
+                      Int64(Length(ht)) - 1, '] ', zq_buf_size(sb),
+                      ' -method ', m2);
             fn := 'jDC' + Itos(date, 14) + 'd' +
                   Itos(Length(ht) - Int64(frags), 10);
             SetLength(blocklist, Length(blocklist) + 1);
@@ -3008,6 +3282,20 @@ begin
       if fi < vf.Count then
       begin
         Inc(dedupesize, fsize);
+        PrintProgress(total_size, total_done, summary);
+        if summary <= 0 then
+        begin
+          newname := Rename(vf[fi]);
+          idx := dt.IndexOf(newname);
+          if (idx < 0) or (TDT(dt.Objects[idx]).date = 0) then Write('+ ')
+          else Write('# ');
+          Write(vf[fi]);
+          if newname <> vf[fi] then Write(' -> ', newname);
+          Write(Format(' %1.0f', [TEdtEntry(vf.Objects[fi]).size + 0.0]));
+          if fsize <> TEdtEntry(vf.Objects[fi]).size then
+            Write(Format(' -> %1.0f', [fsize + 0.0]));
+          WriteLn;
+        end;
         if dst <> nil then FreeAndNil(dst);
       end;
     end;
@@ -3079,6 +3367,7 @@ begin
         PutI(isb, 0, 8);
         zq_buf_write(isb, PAnsiChar(AnsiString(dt[i])), Length(dt[i]));
         zq_buf_write(isb, #0, 1);
+        if summary <= 0 then WriteLn('- ', dt[i]);
         Inc(removed);
         if zq_buf_size(isb) > 16000 then
         begin
@@ -3099,7 +3388,8 @@ begin
       if i < edt.Count then
       begin
         e := TEdtEntry(edt.Objects[i]);
-        idx := dt.IndexOf(edt[i]);
+        newname := Rename(edt[i]);
+        idx := dt.IndexOf(newname);
         if idx >= 0 then dtp := TDT(dt.Objects[idx]) else dtp := nil;
         changed := (e.date <> 0) and
           ((dtp = nil) or (dtp.date <> e.date) or
@@ -3108,8 +3398,17 @@ begin
            ((e.sortkey <> 0) and (not SamePtr(dtp.ptr, e.ptr))));
         if changed then
         begin
+          if (summary <= 0) and (e.data = 0) then
+          begin
+            newname := Rename(edt[i]);
+            if (dtp = nil) or (dtp.date = 0) then Write('+ ')
+            else Write('# ');
+            Write(edt[i]);
+            if newname <> edt[i] then Write(' -> ', newname);
+            WriteLn;
+          end;
           PutI(isb, e.date, 8);
-          zq_buf_write(isb, PAnsiChar(AnsiString(edt[i])), Length(edt[i]));
+          zq_buf_write(isb, PAnsiChar(AnsiString(newname)), Length(newname));
           zq_buf_write(isb, #0, 1);
           if (e.attr and 255) = Ord('u') then
           begin
@@ -3149,6 +3448,7 @@ begin
       if i >= edt.Count then Break;
       Inc(i);
     end;
+    WriteLn(added, ' +added, ', removed, ' -removed.');
 
     { Rewrite the transaction header with the data size }
     archive_end := outArc.Tell();
@@ -3162,16 +3462,32 @@ begin
     outArc.Seek(0, 2);
     archive_size := outArc.Tell();
 
+    { Close before truncating: our file layer keeps a share lock. }
+    outArc.CloseArchive;
+
     if (indexName = '') and (added + removed = 0) and
        (archive_end - header_pos = 104) then
       archive_end := header_pos;
     if (indexName = '') and (archive_end < archive_size) then
     begin
       if archive_end > 0 then
-        TruncateFile(outName, archive_end)
-      else
-        DeleteFile(outName);
+      begin
+        WriteLn('truncating archive from ', Format('%1.0f', [archive_size + 0.0]),
+                ' to ', Format('%1.0f', [archive_end + 0.0]));
+        TruncateFile(outName, archive_end);
+      end
+      else if archive_end = 0 then
+      begin
+        if DeleteFile(outName) then
+          WriteLn('deleted ', outName);
+      end;
     end;
+    WriteLn(StdErr);
+    WriteLn(StdErr, Format('%1.6f + (%1.6f -> %1.6f -> %1.6f) = %1.6f MB',
+                           [header_pos / 1000000.0, total_size / 1000000.0,
+                            dedupesize / 1000000.0,
+                            (archive_end - header_pos) / 1000000.0,
+                            archive_end / 1000000.0]));
   finally
     if pool <> nil then pool.Free;
     if idxArc <> nil then idxArc.Free;
