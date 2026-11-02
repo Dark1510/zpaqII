@@ -1,8 +1,16 @@
 # zpaqII
 
-Port of **zpaq 7.15** (github.com/zpaq/zpaq, Unlicense) to **Pascal + C + x86-64
-assembly**, with **bit-exact** compatibility with the original as the acceptance
-criterion.
+**zpaqII is the direct spiritual successor to zpaq.** It starts as a port of
+**zpaq 7.15** (github.com/zpaq/zpaq, Unlicense) to **Pascal + C + x86-64
+assembly** — bit-exact compatibility with the original being the acceptance
+criterion for everything that exists today — and then carries the archiver
+forward on its own, keeping the archives readable by plain zpaq 7.15.
+
+## Origin
+
+The idea for zpaqII came from this encode.su forum thread:
+
+<https://encode.su/threads/4387-zpaq2>
 
 - `docs/PLAN.md` — stages, acceptance criteria, risks.
 - `docs/ARCHITECTURE.md` — module map, C↔Pascal contract, porting conventions.
