@@ -117,7 +117,10 @@ extern const zq_u8  zq_stdt[712];
 void zq_pred_open(zq_predictor *pr, zq_zpaql *z);
 void zq_pred_init(zq_predictor *pr);
 void zq_pred_free(zq_predictor *pr);
-int  zq_pred_is_modeled(const zq_predictor *pr);
+/* Inline: it is called once per byte by the coder. */
+static inline int zq_pred_is_modeled(const zq_predictor *pr) {
+  return pr->z->header.n > 6 && ZQ_HDR(pr->z, 6) != 0;
+}
 int  zq_pred_predict(zq_predictor *pr);      /* 0..4095 */
 int  zq_pred_predict_ref(zq_predictor *pr);  /* interpreter, for tests */
 void zq_pred_update_ref(zq_predictor *pr, int y);

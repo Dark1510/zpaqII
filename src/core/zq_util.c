@@ -108,7 +108,14 @@ int zq_reader_read(zq_reader *r, char *buf, int n) {
 
 void zq_writer_write(zq_writer *w, const char *buf, int n) {
   int i;
-  if (!w || !w->put) return;
+  if (!w) return;
+  /* Prefer a bulk write: the byte loop below is only a fallback (it costs an
+   * indirect call per byte, which shows up on stored blocks). */
+  if (w->write) {
+    w->write(w->self, buf, n);
+    return;
+  }
+  if (!w->put) return;
   for (i = 0; i < n; ++i) w->put(w->self, (zq_u8)buf[i]);
 }
 

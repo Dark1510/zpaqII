@@ -52,10 +52,6 @@ void zq_pred_free(zq_predictor *pr) {
 #endif
 }
 
-int zq_pred_is_modeled(const zq_predictor *pr) {
-  return pr->z->header.n > 6 && ZQ_HDR(pr->z, 6) != 0;
-}
-
 /* ------------------------------------------------------------------ */
 /* Lookup helpers                                                      */
 /* ------------------------------------------------------------------ */

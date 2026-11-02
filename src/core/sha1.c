@@ -3,10 +3,6 @@
 
 #include <string.h>
 
-static zq_u32 rol32(zq_u32 x, unsigned n) {
-  return (x << n) | (x >> (32 - n));
-}
-
 void zq_sha1_init(zq_sha1 *s) {
   s->len = 0;
   s->h[0] = 0x67452301u;
@@ -17,29 +13,34 @@ void zq_sha1_init(zq_sha1 *s) {
   memset(s->w, 0, sizeof(s->w));
 }
 
-/* Processes one 64-byte block already loaded into w[]. */
+/* Processes one 64-byte block already loaded into w[].  The 80 rounds are
+ * unrolled exactly like upstream (macros with constant indices), which is what
+ * lets the compiler keep a..e in registers and emit plain rotate/add code. */
 static void sha1_process(zq_sha1 *s) {
   zq_u32 a = s->h[0], b = s->h[1], c = s->h[2], d = s->h[3], e = s->h[4];
   static const zq_u32 k[4] = {0x5A827999u, 0x6ED9EBA1u, 0x8F1BBCDCu,
                               0xCA62C1D6u};
-  int i;
-  for (i = 0; i < 80; ++i) {
-    zq_u32 f, t;
-    if (i >= 16) {
-      zq_u32 x = s->w[i & 15] ^ s->w[(i - 3) & 15] ^ s->w[(i - 8) & 15] ^
-                 s->w[(i - 14) & 15];
-      s->w[i & 15] = rol32(x, 1);
-    }
-    if (i % 40 >= 20) f = b ^ c ^ d;
-    else if (i >= 40) f = (b & c) | (d & (b | c));
-    else f = d ^ (b & (c ^ d));
-    t = rol32(a, 5) + f + e + k[i / 20] + s->w[i & 15];
-    e = d;
-    d = c;
-    c = rol32(b, 30);
-    b = a;
-    a = t;
-  }
+  zq_u32 *w = s->w;
+#define ZQ_SHA1_F(a, b, c, d, e, i)                                           \
+  if ((i) >= 16) {                                                            \
+    w[(i) & 15] ^= w[((i) - 3) & 15] ^ w[((i) - 8) & 15] ^ w[((i) - 14) & 15]; \
+    w[(i) & 15] = w[(i) & 15] << 1 | w[(i) & 15] >> 31;                        \
+  }                                                                           \
+  e += ((a) << 5 | (a) >> 27) + k[(i) / 20] + w[(i) & 15] +                    \
+       (((i) % 40 >= 20) ? (b) ^ (c) ^ (d)                                    \
+                         : ((i) >= 40 ? ((b) & (c)) | ((d) & ((b) | (c)))     \
+                                      : (d) ^ ((b) & ((c) ^ (d)))));          \
+  b = (b) << 30 | (b) >> 2;
+#define ZQ_SHA1_R(i)                                                          \
+  ZQ_SHA1_F(a, b, c, d, e, i) ZQ_SHA1_F(e, a, b, c, d, (i) + 1)               \
+  ZQ_SHA1_F(d, e, a, b, c, (i) + 2) ZQ_SHA1_F(c, d, e, a, b, (i) + 3)         \
+  ZQ_SHA1_F(b, c, d, e, a, (i) + 4)
+  ZQ_SHA1_R(0) ZQ_SHA1_R(5) ZQ_SHA1_R(10) ZQ_SHA1_R(15) ZQ_SHA1_R(20)
+  ZQ_SHA1_R(25) ZQ_SHA1_R(30) ZQ_SHA1_R(35) ZQ_SHA1_R(40) ZQ_SHA1_R(45)
+  ZQ_SHA1_R(50) ZQ_SHA1_R(55) ZQ_SHA1_R(60) ZQ_SHA1_R(65) ZQ_SHA1_R(70)
+  ZQ_SHA1_R(75)
+#undef ZQ_SHA1_R
+#undef ZQ_SHA1_F
   s->h[0] += a;
   s->h[1] += b;
   s->h[2] += c;

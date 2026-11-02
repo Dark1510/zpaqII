@@ -46,7 +46,7 @@ $(BUILD)/libzqcore.a: $(CORE_OBJ)
 	@mkdir -p $(dir $@)
 	$(AR) rcs $@ $^
 
-$(BUILD)/obj/%.o: src/core/%.c include/zq.h
+$(BUILD)/obj/%.o: src/core/%.c include/zq.h src/core/zq_internal.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 

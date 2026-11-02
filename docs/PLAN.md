@@ -524,3 +524,26 @@ Measured on the 3 MB text sample and a 1 MB sample (`-t1`, best of 3):
 same 16.7 MB archive (`-m4`, best of 3) went from 7.47 s to 4.35 s (1.72×),
 i.e. 99 % of upstream.  Incompressible input at `-m4` picks a model-free
 method, so its remaining gap is in LZ77, not in the predictor.
+
+## E19: store-path overhead (SHA-1, bulk writes, modelled check)
+
+Profiling the model-free path (incompressible input: `zq_compress_block` with
+`4,0,0`) showed 50 % of the time in SHA-1 (178 M instructions for 3 MB against
+upstream's 64 M) and 13 % more in two per-byte helpers:
+
+* `sha1_process()` now unrolls the 80 rounds with upstream's macro scheme
+  (constant indices, variables rotated through the argument names) instead of a
+  loop with data-dependent branches: 72 → 134 MB/s on the store path, matching
+  upstream's instruction count exactly.
+* `zq_writer_write()` prefers the writer's bulk `write` and only falls back to
+  the per-byte `put` loop; the stored-block flush was paying an indirect call
+  per byte.
+* `zq_pred_is_modeled()` is now `static inline` in `zq_internal.h` (the coder
+  calls it once per byte).
+* The Makefile tracks `src/core/zq_internal.h` as a dependency; without it a
+  header change left stale objects behind (it produced an undefined symbol while
+  making this change).
+
+End to end (`-t1`, best of 3): 20 MB of random data at `-m4` went from 0.51 s to
+0.365 s (67 % → 94 % of upstream); 16.7 MB of text at `-m4` from 5.91 s to
+4.33 s (91 %) and at `-m5` from 74.9 s to 45.5 s (96 %).
