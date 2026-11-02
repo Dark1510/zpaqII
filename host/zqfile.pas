@@ -138,7 +138,8 @@ begin
   size := 0;
   attr := 0;
   isDir := False;
-  if fpStat(fn, st) <> 0 then Exit;
+  { lstat, not stat: upstream does not follow symbolic links when scanning }
+  if fpLStat(fn, st) <> 0 then Exit;
   date := DecimalTime(st.st_mtime);
   size := st.st_size;
   attr := Ord('u') + (Int64(st.st_mode) shl 8);

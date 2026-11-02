@@ -2323,6 +2323,11 @@ var
   fn, sub, nm: string;
 begin
   FileInfo(name, date, size, attr, isDir);
+  { upstream's scandir: only regular files (S_IFREG) and directories (S_IFDIR)
+    are recorded; a symbolic link or a device is skipped without a message }
+  if (date <> 0) and (((attr shr 8) and $F000) <> $8000) and
+     (((attr shr 8) and $F000) <> $4000) then
+    Exit;
   if date = 0 then
   begin
     { upstream's scandir: perror() for a file that cannot be stat'ed }

@@ -660,6 +660,25 @@ errcmp "streaming add on a journaling archive" add j.zpaq a.txt -method s1.0
 errcmp "add with -until N" add base.zpaq a.txt -until 1
 errcmp "-until with an index" add base.zpaq a.txt -until 1 -index x.idx
 
+# a symbolic link is not a regular file: upstream skips it silently
+rm -rf sl1 sl2
+mkdir sl1 sl2
+printf 'target\n' > sl1/t.txt
+printf 'target\n' > sl2/t.txt
+ln -s t.txt sl1/l.txt
+ln -s t.txt sl2/l.txt
+touch -h -d @$NOW sl1/t.txt sl1/l.txt sl2/t.txt sl2/l.txt 2>/dev/null
+(cd sl1 && FAKE_TIME=$NOW LD_PRELOAD=$FT "$Z" add a.zpaq t.txt l.txt -m1 -t1 >log 2>&1)
+ru=$?
+(cd sl2 && ZPAQII_NOW=$NOW "$P" add a.zpaq t.txt l.txt -m1 -t1 >log 2>&1)
+rp=$?
+if [ "$ru" = "$rp" ] && cmp -s sl1/a.zpaq sl2/a.zpaq &&
+   diff <(norm2 <sl1/log) <(norm2 <sl2/log) >/dev/null 2>&1; then
+  ok
+else
+  bad "add skips symbolic links (rc $ru/$rp)"
+fi
+
 # ---- add: selection and -to rename ----
 rm -rf su sp
 mkdir -p su/d1 su/d2 sp/d1 sp/d2

@@ -730,3 +730,11 @@ Both commands now report I/O failures per file and keep going, like upstream:
 
 `tests/cli.sh` covers the error paths and `-force` over a preprocessed archive
 (109 checks).
+
+## E22j: symbolic links are not regular files
+
+The scan now uses `lstat` (as upstream's `scandir`) and only records regular
+files (`S_IFREG`) and directories (`S_IFDIR`); a symbolic link, fifo or device
+is skipped without a message.  The port used to follow the link and archive the
+target's contents, so the archive and the `Adding ...` count differed.
+`tests/cli.sh` checks an explicit symlink argument (112 checks).
