@@ -212,6 +212,36 @@ fi
 cd ..
 cd ..
 
+# ---- list comparison against the file system ----
+rm -rf lc
+mkdir -p lc/sub
+cd lc || exit 1
+printf 'alpha\n' > a.txt
+printf 'beta\n' > sub/b.txt
+head -c 5000 /dev/urandom > c.bin
+ZPAQII_NOW=$NOW "$P" add l.zpaq a.txt sub c.bin -m1 >/dev/null 2>&1
+norm() { grep -v -e '^zpaq v' -e ' seconds (' ; }
+listcmp() { # tag, args...
+  local tag=$1
+  shift
+  "$Z" list l.zpaq "$@" -t1 2>&1 | norm > ../lu.txt
+  "$P" list l.zpaq "$@" 2>&1 | norm > ../lo.txt
+  if diff ../lu.txt ../lo.txt >/dev/null 2>&1; then ok; else bad "list $tag"; fi
+}
+listcmp "plain"
+listcmp "compare same" .
+listcmp "compare -force" . -force
+listcmp "compare one dir" sub
+listcmp "compare -only" -only '*.txt'
+listcmp "compare -not" -not '='
+printf 'alpha changed\n' > a.txt
+listcmp "changed date" .
+listcmp "changed -force" . -force
+printf 'alpha\n' > a.txt
+touch -d @$((NOW + 100)) a.txt
+listcmp "changed time" .
+cd ..
+
 # ---- -index: create an index from an archive (extract -index F) ----
 rm -rf ix
 mkdir ix
@@ -309,5 +339,4 @@ if [ $fails -ne 0 ]; then
   exit 1
 fi
 echo "not covered yet (known gaps):"
-echo "  list comparison against the file system"
-echo "  (=same / #different / +external, -summary, -test, -repack)"
+echo "  -summary, -test, -repack, -all, -noattributes, convert"

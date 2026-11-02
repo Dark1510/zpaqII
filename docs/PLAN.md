@@ -395,3 +395,24 @@ output only on archives with several blocks.
 Measured on a 60 MB archive with 16 MB blocks: extract 0.75 s at `-t1`,
 0.33 s at `-t8`.  `tests/cli.sh` checks that `-t1/-t2/-t4/-t8` extract identical
 trees.
+
+## E10: list comparison against the file system (done)
+
+`zpaq list archive files...` now compares the archive with the file system the
+way upstream does:
+
+* the files given on the command line are scanned into an external list;
+* each external file is paired with its archive entry (after `-to` renaming)
+  and marked `=` (same date/size/attributes, or same contents with `-force`),
+  `#` (different) or `+` (external only); archive entries with no match are
+  `-`;
+* directory sizes are the sum of their contents, and `-not =chars` filters the
+  listing by status;
+* the counters line matches upstream (`N =same, M #different, ...`).
+
+`TJidac.Equal()` streams the archive entry through the block cache and compares
+it byte by byte with the file, so `-force` verifies real contents.
+
+`tests/cli.sh` compares the whole `list` output (banner and timing normalised)
+against the oracle for: plain listing, comparison of a matching tree, `-force`,
+a changed file, a changed timestamp, `-only` and `-not`.

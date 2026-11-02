@@ -83,6 +83,7 @@ type
     notfiles: TStringList;   { -not: exclude these prefixes }
     nottype: string;         { -not =...: list chars to suppress }
     fragment: Integer;       { -fragment N: 2^N KiB average fragment size }
+    all: Integer;            { -all N: list/extract versions in N digit dirs }
     threads: Integer;        { -tN: compression threads, 0 = one per CPU }
     indexName: string;       { -index F: index archive used by add/extract }
     dhsize: Int64;           { total size of D blocks according to H blocks }
@@ -97,7 +98,8 @@ type
     function WriteIndex(const indexFile: string; force: Boolean): Integer;
     function ReadArchive(out errors: Integer; out nfiles: Cardinal;
                         const src: string = ''): Int64;
-    function List: Integer;
+    function List(force: Boolean): Integer;
+    function Equal(dtr: TDT; const fn: string): Boolean;
     function Extract(force: Boolean): Integer;
     function Add(const addFiles: TStringList; const method: string; date: Int64;
                  force: Boolean; out errors: Integer): Integer;
@@ -720,6 +722,7 @@ begin
   notfiles.CaseSensitive := True;
   nottype := '';
   fragment := 6;
+  all := 0;
   threads := 0;
   indexName := '';
   dhsize := 0;
@@ -1483,102 +1486,6 @@ end;
 { list                                                                }
 { ------------------------------------------------------------------ }
 
-function TJidac.List: Integer;
-var
-  i, j, idx: Integer;
-  dtr, dir: TDT;
-  usize, allsize, ddsize: Int64;
-  nfiles, refs, nfrags, unknown, total: Cardinal;
-  refsSeen: array of Boolean;
-  sel: Boolean;
-  internal: Cardinal;
-begin
-  { Directory sizes are the sum of their contents (upstream, before listing). }
-  for i := 0 to dt.Count - 1 do
-  begin
-    dtr := TDT(dt.Objects[i]);
-    if (Length(dt[i]) > 0) and (dt[i][Length(dt[i])] <> '/') then
-      for j := 1 to Length(dt[i]) do
-        if dt[i][j] = '/' then
-        begin
-          idx := dt.IndexOf(Copy(dt[i], 1, j));
-          if idx >= 0 then
-          begin
-            dir := TDT(dt.Objects[idx]);
-            Inc(dir.size, dtr.size);
-          end;
-        end;
-  end;
-
-  WriteLn;
-
-  usize := 0;
-  internal := 0;
-  for i := 0 to dt.Count - 1 do
-  begin
-    dtr := TDT(dt.Objects[i]);
-    if dtr.date = 0 then Continue;
-    { selection applies to the renamed name for list (upstream passes
-      renamed=true), and -not =... suppresses by comparison result }
-    sel := IsSelected(Rename(dt[i]), True);
-    if sel and (Pos('-', nottype) > 0) then sel := False;
-    if sel then
-    begin
-      if (dt[i] <> '') and (dt[i][Length(dt[i])] <> '/') then
-        Inc(usize, dtr.size);
-      Write('-', ' ', DateToString(dtr.date), ' ',
-            Format('%12.0f', [dtr.size + 0.0]), ' ',
-            AttrToString(dtr.attr), ' ', dt[i]);
-      WriteLn;
-      Inc(internal);
-    end;
-  end;
-
-  { Statistics: dedupe counts over every file in the archive. }
-  allsize := 0;
-  ddsize := 0;
-  nfiles := 0;
-  refs := 0;
-  nfrags := 0;
-  unknown := 0;
-  total := Cardinal(Length(ht)) - 1;
-  SetLength(refsSeen, Length(ht));
-  for i := 0 to dt.Count - 1 do
-  begin
-    dtr := TDT(dt.Objects[i]);
-    if dtr.date = 0 then Continue;
-    Inc(nfiles);
-    for j := 0 to High(dtr.ptr) do
-    begin
-      idx := dtr.ptr[j];
-      if (idx > 0) and (idx < Length(ht)) then
-      begin
-        Inc(refs);
-        if ht[idx].usize >= 0 then Inc(allsize, ht[idx].usize);
-        if not refsSeen[idx] then
-        begin
-          refsSeen[idx] := True;
-          Inc(nfrags);
-          if ht[idx].usize >= 0 then Inc(ddsize, ht[idx].usize)
-          else Inc(unknown);
-        end;
-      end;
-    end;
-  end;
-
-  WriteLn;
-  WriteLn(Format('%1.6f MB of %1.6f MB (%d files) shown',
-                 [usize / 1000000.0, allsize / 1000000.0, nfiles]));
-  WriteLn(Format('  -> %1.6f MB (%d refs to %d of %d frags) after dedupe',
-                 [ddsize / 1000000.0, refs, nfrags, total]));
-  WriteLn(Format('  -> %1.6f MB compressed.', [lastOffset / 1000000.0]));
-  if unknown > 0 then
-    WriteLn(unknown, ' fragments have unknown size');
-  if files.Count > 0 then
-    WriteLn(Format('%d =same, %d #different, %d +external, %d -internal',
-                   [0, 0, 0, internal]));
-  Result := 0;
-end;
 
 { ------------------------------------------------------------------ }
 { extract                                                             }
@@ -1940,6 +1847,261 @@ begin
     e.attr := attr;
     e.sortkey := 0;
   end;
+end;
+
+{ True if the archive entry has the same contents as external file fn. }
+function TJidac.Equal(dtr: TDT; const fn: string): Boolean;
+var
+  fs: TFileStream;
+  buf: array[0..65535] of AnsiChar;
+  k, nb, cur, ofsFrag: Integer;
+  frag: Cardinal;
+  offsetInBlock: Int64;
+  blockData: PAnsiChar;
+  osb: TZqBuf;
+  bad: Boolean;
+  n, chunk: Int64;
+begin
+  Result := False;
+  osb := zq_buf_new(1 shl 16);
+  cur := -1;
+  try
+    fs := TFileStream.Create(fn, fmOpenRead or fmShareDenyNone);
+    try
+      for k := 0 to High(dtr.ptr) do
+      begin
+        frag := dtr.ptr[k];
+        if (frag = 0) or (frag >= Cardinal(Length(ht))) then Exit;
+        nb := FindBlockFor(frag);
+        if nb < 0 then Exit;
+        if nb <> cur then
+        begin
+          if not LoadBlock(archive, password, nb, osb, bad) then Exit;
+          cur := nb;
+          ofsFrag := blocks[nb].start;
+          offsetInBlock := 0;
+        end
+        else if frag < Cardinal(ofsFrag) then
+        begin
+          ofsFrag := blocks[nb].start;
+          offsetInBlock := 0;
+        end;
+        while ofsFrag < Int64(frag) do
+        begin
+          Inc(offsetInBlock, ht[ofsFrag].usize);
+          Inc(ofsFrag);
+        end;
+        blockData := zq_buf_data(osb);
+        n := ht[frag].usize;
+        while n > 0 do
+        begin
+          if n > SizeOf(buf) then chunk := SizeOf(buf) else chunk := n;
+          if fs.Read(buf, LongInt(chunk)) <> chunk then Exit;
+          if not CompareMem(@buf[0], blockData + offsetInBlock, chunk) then Exit;
+          Inc(offsetInBlock, chunk);
+          Dec(n, chunk);
+        end;
+      end;
+      Result := fs.Read(buf, 1) = 0;
+    finally
+      fs.Free;
+    end;
+  finally
+    zq_buf_free(osb);
+  end;
+end;
+
+{ List archive contents, comparing with the file system when files... are
+  given (upstream list).  Status: '-' internal, '+' external, '=' same,
+  '#' different, '^' duplicate. }
+function TJidac.List(force: Boolean): Integer;
+var
+  i, j, idx, n: Integer;
+  dtr, dir: TDT;
+  edt: TStringList;
+  e: TEdtEntry;
+  names: array of string;
+  ldate, lsize, lattr: array of Int64;
+  lstat: array of AnsiChar;
+  lref: array of Integer;
+  lskip: array of Boolean;
+  used: array of Boolean;
+  usize, allsize, ddsize: Int64;
+  nfiles, refs, nfrags, unknown, total: Cardinal;
+  refsSeen: array of Boolean;
+  matches, mismatches, internal, external, dups: Cardinal;
+  same: Boolean;
+  st: AnsiChar;
+
+  procedure AddEntry(const nm: string; adate, asize, aattr: Int64;
+                     ast: AnsiChar; aref: Integer);
+  begin
+    SetLength(names, Length(names) + 1);
+    SetLength(ldate, Length(ldate) + 1);
+    SetLength(lsize, Length(lsize) + 1);
+    SetLength(lattr, Length(lattr) + 1);
+    SetLength(lstat, Length(lstat) + 1);
+    SetLength(lref, Length(lref) + 1);
+    SetLength(lskip, Length(lskip) + 1);
+    names[High(names)] := nm;
+    ldate[High(ldate)] := adate;
+    lsize[High(lsize)] := asize;
+    lattr[High(lattr)] := aattr;
+    lstat[High(lstat)] := ast;
+    lref[High(lref)] := aref;
+    lskip[High(lskip)] := False;
+  end;
+
+  procedure DirSizes(list: TStringList);
+  var
+    a, b, k: Integer;
+    dd: TDT;
+  begin
+    for a := 0 to list.Count - 1 do
+    begin
+      dd := TDT(list.Objects[a]);
+      if (Length(list[a]) > 0) and (list[a][Length(list[a])] <> '/') then
+        for k := 1 to Length(list[a]) do
+          if list[a][k] = '/' then
+          begin
+            b := list.IndexOf(Copy(list[a], 1, k));
+            if b >= 0 then Inc(TDT(list.Objects[b]).size, dd.size);
+          end;
+    end;
+  end;
+
+begin
+  matches := 0;
+  mismatches := 0;
+  internal := 0;
+  external := 0;
+  dups := 0;
+
+  { External files named on the command line. }
+  edt := TStringList.Create;
+  edt.Sorted := True;
+  edt.CaseSensitive := True;
+  edt.Duplicates := dupIgnore;
+  try
+    for i := 0 to files.Count - 1 do ScanInto(edt, files[i]);
+    if files.Count > 0 then WriteLn(edt.Count, ' external files.');
+    WriteLn;
+
+    DirSizes(dt);
+    DirSizes(edt);
+
+    SetLength(used, dt.Count);
+    for i := 0 to edt.Count - 1 do
+    begin
+      e := TEdtEntry(edt.Objects[i]);
+      idx := dt.IndexOf(Rename(edt[i]));
+      if (idx >= 0) and ((all > 0) or (TDT(dt.Objects[idx]).date <> 0)) then
+      begin
+        dtr := TDT(dt.Objects[idx]);
+        used[idx] := True;
+        AddEntry(dt[idx], dtr.date, dtr.size, dtr.attr, '-', idx);
+      end;
+      AddEntry(edt[i], e.date, e.size, e.attr, '+', -1);
+    end;
+    for idx := 0 to dt.Count - 1 do
+    begin
+      dtr := TDT(dt.Objects[idx]);
+      if used[idx] or ((all = 0) and (dtr.date = 0)) then Continue;
+      AddEntry(dt[idx], dtr.date, dtr.size, dtr.attr, '-', idx);
+    end;
+
+    { Pair each internal entry with the following external one. }
+    n := Length(names);
+    i := 0;
+    while i < n do
+    begin
+      if (lstat[i] = '-') and (i + 1 < n) and (lstat[i + 1] = '+') then
+      begin
+        if force then
+          same := Equal(TDT(dt.Objects[lref[i]]), names[i + 1])
+        else
+          same := (ldate[i] = ldate[i + 1]) and (lsize[i] = lsize[i + 1]) and
+                  ((lattr[i] = 0) or (lattr[i + 1] = 0) or
+                   (lattr[i] = lattr[i + 1]));
+        if same then
+        begin
+          lstat[i] := '=';
+          lskip[i + 1] := True;
+        end
+        else
+          lstat[i] := '#';
+      end;
+      Inc(i);
+    end;
+
+    usize := 0;
+    for i := 0 to n - 1 do
+    begin
+      if lskip[i] then Continue;
+      st := lstat[i];
+      case st of
+        '=': Inc(matches);
+        '#': Inc(mismatches);
+        '-': Inc(internal);
+        '+': Inc(external);
+      end;
+      if Pos(st, nottype) > 0 then Continue;
+      if (names[i] <> '') and (names[i][Length(names[i])] <> '/') then
+        Inc(usize, lsize[i]);
+      Write(st, ' ', DateToString(ldate[i]), ' ',
+            Format('%12.0f', [lsize[i] + 0.0]), ' ',
+            AttrToString(lattr[i]), ' ', names[i]);
+      WriteLn;
+    end;
+
+    { Statistics: dedupe counts over every file in the archive. }
+    allsize := 0;
+    ddsize := 0;
+    nfiles := 0;
+    refs := 0;
+    nfrags := 0;
+    unknown := 0;
+    total := Cardinal(Length(ht)) - 1;
+    SetLength(refsSeen, Length(ht));
+    for i := 0 to dt.Count - 1 do
+    begin
+      dtr := TDT(dt.Objects[i]);
+      if dtr.date = 0 then Continue;
+      Inc(nfiles);
+      for j := 0 to High(dtr.ptr) do
+      begin
+        idx := dtr.ptr[j];
+        if (idx > 0) and (idx < Length(ht)) then
+        begin
+          Inc(refs);
+          if ht[idx].usize >= 0 then Inc(allsize, ht[idx].usize);
+          if not refsSeen[idx] then
+          begin
+            refsSeen[idx] := True;
+            Inc(nfrags);
+            if ht[idx].usize >= 0 then Inc(ddsize, ht[idx].usize)
+            else Inc(unknown);
+          end;
+        end;
+      end;
+    end;
+    dups := 0;
+
+    WriteLn;
+    WriteLn(Format('%1.6f MB of %1.6f MB (%d files) shown',
+                   [usize / 1000000.0, allsize / 1000000.0, nfiles]));
+    WriteLn(Format('  -> %1.6f MB (%d refs to %d of %d frags) after dedupe',
+                   [ddsize / 1000000.0, refs, nfrags, total]));
+    WriteLn(Format('  -> %1.6f MB compressed.', [lastOffset / 1000000.0]));
+    if unknown > 0 then
+      WriteLn(unknown, ' fragments have unknown size');
+    if files.Count > 0 then
+      WriteLn(Format('%d =same, %d #different, %d +external, %d -internal',
+                     [matches, mismatches, external, internal]));
+  finally
+    edt.Free;
+  end;
+  Result := 0;
 end;
 
 procedure TruncateFile(const fn: string; size: Int64);

@@ -317,7 +317,7 @@ begin
   end
   else if listOnly then
   begin
-    j.List;               { tolerant: works for streaming and journaling }
+    j.List(force);        { tolerant: works for streaming and journaling }
     Result := 0;          { upstream list() always returns 0 }
   end
   else if j.isJidac then
