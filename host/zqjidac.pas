@@ -1134,10 +1134,10 @@ begin
     SetLength(lastfile, Length(lastfile) - 5);
   if not FileExistsUTF8(SubPart(arcName, 1)) then
   begin
-    WriteLn(StdErr, arcName, ' not found.');
-    Inc(errors);
-    Result := 0;
-    Exit;
+    { upstream's InputArchive::open() calls ioerr(): perror + throw }
+    WriteLn(StdErr, SubPart(arcName, 1), ': ',
+            SysErrorMessage(ESysENOENT));
+    raise Exception.Create(SubPart(arcName, 1));
   end;
   Write(arcName);
   if version = DEFAULT_VERSION then Write(': ')

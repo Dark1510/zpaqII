@@ -360,6 +360,30 @@ fi
 cd ..
 
 
+# ---- a missing archive is an error, like upstream's InputArchive::open ----
+"$Z" list noexiste.zpaq >uu.txt 2>uu.err
+ru=$?
+"$P" list noexiste.zpaq >pp.txt 2>pp.err
+rp=$?
+if [ "$ru" = "$rp" ] &&
+   diff <(norm <uu.txt) <(norm <pp.txt) >/dev/null 2>&1 &&
+   diff <(norm <uu.err) <(norm <pp.err) >/dev/null 2>&1; then
+  ok
+else
+  bad "missing archive (rc $ru/$rp)"
+fi
+"$Z" list 'no????.zpaq' >uu.txt 2>uu.err
+ru=$?
+"$P" list 'no????.zpaq' >pp.txt 2>pp.err
+rp=$?
+if [ "$ru" = "$rp" ] &&
+   diff <(norm <uu.txt) <(norm <pp.txt) >/dev/null 2>&1 &&
+   diff <(norm <uu.err) <(norm <pp.err) >/dev/null 2>&1; then
+  ok
+else
+  bad "missing multi-part archive (rc $ru/$rp)"
+fi
+
 # ---- usage: unknown options and commands match upstream ----
 usagecmp() {  # tag, args...
   local tag=$1
