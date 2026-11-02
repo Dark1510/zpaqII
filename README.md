@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/YadeWira/zpaqII/actions/workflows/ci.yml/badge.svg)](https://github.com/YadeWira/zpaqII/actions/workflows/ci.yml)
 
-**zpaqII is the spiritual successor to zpaq.** It starts as a port of
+**zpaqII is a concept: the spiritual successor to zpaq.** It starts as a port of
 **zpaq 7.15** (github.com/zpaq/zpaq, Unlicense) to **Pascal + C + x86-64
 assembly** — bit-exact compatibility with the original being the acceptance
 criterion for everything that exists today — and then carries the archiver
@@ -16,6 +16,7 @@ The idea for zpaqII came from this encode.su forum thread:
 
 ## Documentation
 
+- [Wiki](https://github.com/YadeWira/zpaqII/wiki) — what it is, extensions, platforms, roadmap
 - `docs/PLAN.md` — stages, acceptance criteria, risks.
 - `docs/ARCHITECTURE.md` — module map, C↔Pascal contract, porting conventions.
 - `docs/DECISIONS.md` — ADRs (oracle, language split, error handling, threads).
