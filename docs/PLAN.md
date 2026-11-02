@@ -438,3 +438,10 @@ directories (the fragment table is unchanged).
 
 `tests/cli.sh` compares `list -all 1/2/4` and `extract -all 2` against the
 oracle (68 checks).
+
+## E15: convert (no-op in upstream)
+
+`zpaq convert` is accepted by the argument parser (`opt=="convert"` sets
+`command='c'`) but `doCommand()` has no branch for `'c'`, so it prints the usage
+message and exits with 1.  The port behaves identically; `tests/cli.sh` checks
+that both return the same exit code.  Nothing to implement.

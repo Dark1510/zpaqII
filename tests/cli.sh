@@ -356,6 +356,13 @@ fi
 cd ..
 
 
+# ---- convert: upstream parses it but has no command, so usage + exit 1 ----
+"$Z" convert base.zpaq >/dev/null 2>&1
+ru=$?
+"$P" convert base.zpaq >/dev/null 2>&1
+rp=$?
+if [ "$ru" = "$rp" ]; then ok; else bad "convert rc ($ru vs $rp)"; fi
+
 # ---- -all N: one directory per version ----
 rm -rf av
 mkdir av
@@ -388,4 +395,4 @@ if [ $fails -ne 0 ]; then
   exit 1
 fi
 echo "not covered yet (known gaps):"
-echo "  -repack, convert"
+echo "  -repack F [X]"
