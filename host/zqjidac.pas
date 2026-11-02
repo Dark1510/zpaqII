@@ -2749,7 +2749,8 @@ begin
                    [usize / 1000000.0, allsize / 1000000.0, nfiles]));
     WriteLn(Format('  -> %1.6f MB (%d refs to %d of %d frags) after dedupe',
                    [ddsize / 1000000.0, refs, nfrags, total]));
-    WriteLn(Format('  -> %1.6f MB compressed.', [lastOffset / 1000000.0]));
+    WriteLn(Format('  -> %1.6f MB compressed.',
+                   [(lastOffset + dhsize - dcsize) / 1000000.0]));
     if unknown > 0 then
       WriteLn(unknown, ' fragments have unknown size');
     if files.Count > 0 then
@@ -2757,6 +2758,9 @@ begin
                      [matches, mismatches, external, internal]));
     if summary > 0 then
       WriteLn(dups, ' of largest ', summary, ' files are ^duplicates');
+    if dhsize <> dcsize then
+      WriteLn(Format('Note: %1.0f of %1.0f compressed bytes are in archive',
+                     [dcsize + 0.0, dhsize + 0.0]));
   finally
     edt.Free;
   end;

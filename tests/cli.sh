@@ -275,6 +275,13 @@ FAKE_TIME=$((NOW + 1000)) LD_PRELOAD=$FT "$Z" add arc.zpaq a.txt -m1 -t1 >/dev/n
 "$Z" extract arc.zpaq -index iu.zpaq -t1 >/dev/null 2>&1
 "$P" extract arc.zpaq -index io.zpaq >/dev/null 2>&1
 if cmp -s iu.zpaq io.zpaq; then ok; else bad "-index: create index"; fi
+if diff <("$Z" list iu.zpaq -t1 2>&1 | norm | sed 's/iu\.zpaq/I/') \
+        <("$P" list io.zpaq 2>&1 | norm | sed 's/io\.zpaq/I/') \
+        >/dev/null 2>&1; then
+  ok
+else
+  bad "list index archive"
+fi
 "$P" extract arc.zpaq -index io.zpaq >/dev/null 2>&1
 rp=$?
 "$Z" extract arc.zpaq -index iu.zpaq -t1 >/dev/null 2>&1
