@@ -547,3 +547,11 @@ upstream's 64 M) and 13 % more in two per-byte helpers:
 End to end (`-t1`, best of 3): 20 MB of random data at `-m4` went from 0.51 s to
 0.365 s (67 % → 94 % of upstream); 16.7 MB of text at `-m4` from 5.91 s to
 4.33 s (91 %) and at `-m5` from 74.9 s to 45.5 s (96 %).
+
+One more layout change came out of this: `zq_arr.elem` is now an `int` instead
+of a `size_t`, so it occupies the padding `libzpaq::Array` already has and
+`sizeof(zq_arr) == 24`, `sizeof(zq_component) == 112`.  The whole predictor
+layout then matches upstream's byte for byte (`c8` 0, `hmap4` 4, `p` 8, `h`
+1032, `z` 2056, `comp` 2064, `initTables` 30736, …), which keeps the component
+stride and the hot tables on the same cache lines; `-m4` on text went from
+88 % to 92 %.

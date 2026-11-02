@@ -76,7 +76,9 @@ typedef struct zq_arr {
   void  *data;    /* usable area, 64-byte aligned */
   size_t n;       /* number of elements */
   int    offset;  /* bytes from allocation start to data */
-  size_t elem;    /* element size */
+  int    elem;    /* element size (1..8); fits in upstream's padding so that
+                     sizeof(zq_arr) == sizeof(libzpaq::Array) == 24 and the
+                     predictor/component layouts match upstream's exactly */
 } zq_arr;
 
 void zq_arr_resize(zq_arr *a, size_t n, size_t elem);

@@ -73,7 +73,7 @@ void zq_arr_resize(zq_arr *a, size_t n, size_t elem) {
     a->n = 0;
     a->offset = 0;
   }
-  a->elem = elem;
+  a->elem = (int)elem;
   if (n == 0) return;
   {
     const size_t nb = 128 + n * elem; /* upstream overflow check */
