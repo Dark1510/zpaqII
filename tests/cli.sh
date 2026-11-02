@@ -230,6 +230,7 @@ listcmp() { # tag, args...
 listcmp "plain"
 listcmp "compare same" .
 listcmp "compare -force" . -force
+listcmp "compare dir -force" sub -force
 listcmp "compare one dir" sub
 listcmp "compare -only" -only '*.txt'
 listcmp "compare -not" -not '='

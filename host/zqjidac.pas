@@ -2538,7 +2538,13 @@ begin
       if (lstat[i] = '-') and (i + 1 < n) and (lstat[i + 1] = '+') then
       begin
         if force then
-          same := Equal(TDT(dt.Objects[lref[i]]), names[i + 1])
+        begin
+          { upstream's equal(): a directory only has to exist }
+          if (names[i] <> '') and (names[i][Length(names[i])] = '/') then
+            same := FileExistsUTF8(names[i + 1])
+          else
+            same := Equal(TDT(dt.Objects[lref[i]]), names[i + 1]);
+        end
         else
           same := (ldate[i] = ldate[i + 1]) and (lsize[i] = lsize[i + 1]) and
                   ((lattr[i] = 0) or (lattr[i + 1] = 0) or

@@ -32,6 +32,14 @@ local `TDateTime` as UTC in FPC).  It now uses `DateTimeToUnix(Now, False)`, so
 the C block name carries the UTC date like upstream's `gmtime`-based code, and
 archives are identical regardless of `TZ`.  `tests/cli.sh` checks it.
 
+## stdout/stderr interleaving
+
+The stream *contents* are identical to upstream's (the test suite compares them
+separately), but when both are redirected to the same file the order can differ:
+FPC line-buffers `Output`, so a `perror`-style message (e.g. `nope.txt: No such
+file or directory` during `add`) appears in place, while upstream's fully
+buffered stdout pushes it to the front.  Nothing else depends on the order.
+
 ## Not deviations (upstream behaviour reproduced on purpose)
 
 See `docs/JIT.md` for the JIT quirks (runs of identical swap bytes, repeated
