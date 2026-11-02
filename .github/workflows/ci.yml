@@ -115,21 +115,22 @@ jobs:
           cmp b.bin out/b.bin
           echo "wine roundtrip ok"
 
-  # Experimental: no macOS machine was available while this was written, so it
-  # is allowed to fail until someone runs it on a Mac.
+  # macOS arm64: the JIT is compiled out there (System V x86-64 only), so the
+  # interpreter does the work.  The faketime-based CLI tests are not run: they
+  # rely on LD_PRELOAD, which macOS spells differently.
   macos-arm64:
     runs-on: macos-14
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: toolchain
-        run: brew install fpc || brew install --cask fpc
-      - name: build
+        run: brew install fpc
+      - name: build (core + host)
         run: |
           make lib
           make host
-      - name: core unit tests
-        run: |
-          make build/vectors_e1
-          ./build/vectors_e1 | tail -1
-          make test-fragchain
+      - name: oracle (upstream 7.15)
+        run: make oracle UPSTREAM=$PWD/build/upstream
+      - name: core tests against the oracle
+        run: make test-e1 test-e2 test-e3 test-e4 test-e4b UPSTREAM=$PWD/build/upstream
+      - name: fragment chains
+        run: make test-fragchain
