@@ -240,6 +240,9 @@ listcmp "changed -force" . -force
 printf 'alpha\n' > a.txt
 touch -d @$((NOW + 100)) a.txt
 listcmp "changed time" .
+listcmp "-s2" -s2
+listcmp "-summary 1" -summary 1
+listcmp "-s-1" -s-1
 cd ..
 
 # ---- -index: create an index from an archive (extract -index F) ----
@@ -339,4 +342,4 @@ if [ $fails -ne 0 ]; then
   exit 1
 fi
 echo "not covered yet (known gaps):"
-echo "  -summary, -test, -repack, -all, -noattributes, convert"
+echo "  -test, -repack, -all, -noattributes, convert"

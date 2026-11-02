@@ -385,6 +385,7 @@ var
   force: Boolean;
   frag: Integer;
   nthreads: Integer;
+  summary: Integer;
   tmp: TJidac;
   errs2: Integer;
   nfiles2: Cardinal;
@@ -415,6 +416,7 @@ begin
   force := False;
   frag := 6;
   nthreads := 0;
+  summary := 0;
   nottype := '';
   files := TStringList.Create;
   files.CaseSensitive := True;
@@ -479,6 +481,14 @@ begin
         Inc(i);
         indexName := ParamStr(i);
       end
+      else if (a = '-summary') then
+      begin
+        Inc(i);
+        summary := StrToIntDef(ParamStr(i), 0);
+      end
+      else if (Copy(a, 1, 2) = '-s') and (Length(a) > 2) and
+              (((a[3] >= '0') and (a[3] <= '9')) or (a[3] = '-')) then
+        summary := StrToIntDef(Copy(a, 3, MaxInt), 0)
       else if (a = '-fragment') then
       begin
         Inc(i);
@@ -565,6 +575,7 @@ begin
         jadd.nottype := nottype;
         jadd.indexName := indexName;
         jadd.threads := nthreads;
+        jadd.summary := summary;
         if jadd.version < 0 then
         begin
           { -until -N: count from the end, like upstream }

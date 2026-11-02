@@ -84,6 +84,7 @@ type
     nottype: string;         { -not =...: list chars to suppress }
     fragment: Integer;       { -fragment N: 2^N KiB average fragment size }
     all: Integer;            { -all N: list/extract versions in N digit dirs }
+    summary: Integer;        { -summary N: top N by size, -1 = fragment ids }
     threads: Integer;        { -tN: compression threads, 0 = one per CPU }
     indexName: string;       { -index F: index archive used by add/extract }
     dhsize: Int64;           { total size of D blocks according to H blocks }
@@ -723,6 +724,7 @@ begin
   nottype := '';
   fragment := 6;
   all := 0;
+  summary := 0;
   threads := 0;
   indexName := '';
   dhsize := 0;
@@ -1930,8 +1932,10 @@ var
   nfiles, refs, nfrags, unknown, total: Cardinal;
   refsSeen: array of Boolean;
   matches, mismatches, internal, external, dups: Cardinal;
-  same: Boolean;
+  same, hyphen: Boolean;
   st: AnsiChar;
+  ii: Integer;
+  order: array of Integer;
 
   procedure AddEntry(const nm: string; adate, asize, aattr: Int64;
                      ast: AnsiChar; aref: Integer);
@@ -2013,7 +2017,7 @@ begin
     { Pair each internal entry with the following external one. }
     n := Length(names);
     i := 0;
-    while i < n do
+    while (summary <= 0) and (i < n) do
     begin
       if (lstat[i] = '-') and (i + 1 < n) and (lstat[i + 1] = '+') then
       begin
@@ -2034,9 +2038,33 @@ begin
       Inc(i);
     end;
 
-    usize := 0;
+    SetLength(order, 0);
     for i := 0 to n - 1 do
     begin
+      SetLength(order, Length(order) + 1);
+      order[High(order)] := i;
+    end;
+    if summary > 0 then
+    begin
+      { insertion sort by descending size }
+      for i := 1 to High(order) do
+      begin
+        idx := order[i];
+        j := i - 1;
+        while (j >= 0) and (lsize[order[j]] < lsize[idx]) do
+        begin
+          order[j + 1] := order[j];
+          Dec(j);
+        end;
+        order[j + 1] := idx;
+      end;
+      if Length(order) > summary then SetLength(order, summary);
+    end;
+
+    usize := 0;
+    for ii := 0 to High(order) do
+    begin
+      i := order[ii];
       if lskip[i] then Continue;
       st := lstat[i];
       case st of
@@ -2051,6 +2079,28 @@ begin
       Write(st, ' ', DateToString(ldate[i]), ' ',
             Format('%12.0f', [lsize[i] + 0.0]), ' ',
             AttrToString(lattr[i]), ' ', names[i]);
+      if (summary < 0) and (lref[i] >= 0) then
+      begin
+        dtr := TDT(dt.Objects[lref[i]]);
+        hyphen := False;
+        for j := 0 to High(dtr.ptr) do
+        begin
+          if (j = 0) or (j = High(dtr.ptr)) or
+             (dtr.ptr[j] <> dtr.ptr[j - 1] + 1) or
+             (j + 1 > High(dtr.ptr)) or
+             (dtr.ptr[j] <> dtr.ptr[j + 1] - 1) then
+          begin
+            if not hyphen then Write(' ');
+            hyphen := False;
+            Write(dtr.ptr[j]);
+          end
+          else
+          begin
+            if not hyphen then Write('-');
+            hyphen := True;
+          end;
+        end;
+      end;
       WriteLn;
     end;
 
@@ -2098,6 +2148,8 @@ begin
     if files.Count > 0 then
       WriteLn(Format('%d =same, %d #different, %d +external, %d -internal',
                      [matches, mismatches, external, internal]));
+    if summary > 0 then
+      WriteLn(dups, ' of largest ', summary, ' files are ^duplicates');
   finally
     edt.Free;
   end;
