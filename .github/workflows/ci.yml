@@ -52,8 +52,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential g++ git make fpc python3 \
-            gcc-aarch64-linux-gnu qemu-user \
-            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 fp-units-win-base
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user \
+            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
+            fp-units-win-base fp-units-win-fcl
       - name: oracle (upstream 7.15, for the reference output)
         run: make oracle UPSTREAM=$PWD/build/upstream
       - name: compile and run the core on every target
@@ -95,13 +96,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential make fpc gcc-mingw-w64-x86-64 fp-units-win-base \
-            wine64
+            build-essential make fpc gcc-mingw-w64-x86-64 \
+            fp-units-win-base fp-units-win-fcl wine64
       - name: build
         run: make win64
       - name: add + extract roundtrip under wine
         env:
           WINEDEBUG: "-all"
+          WINEDLLOVERRIDES: "mscoree,mshtml="   # no Mono/Gecko download
           WINEPREFIX: ${{ github.workspace }}/build/wineprefix
         run: |
           mkdir -p build/smoke && cd build/smoke

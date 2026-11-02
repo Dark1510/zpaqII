@@ -170,7 +170,7 @@ $(UPSTREAM)/zpaq:
 	@if [ ! -d $(UPSTREAM)/.git ]; then \
 	  git clone --depth 1 https://github.com/zpaq/zpaq.git $(UPSTREAM); \
 	fi
-	$(MAKE) -C $(UPSTREAM) zpaq
+	{ $(MAKE) -C $(UPSTREAM) CPPFLAGS="-Dunix -DNOJIT" zpaq; }
 
 clean:
 	rm -rf build build-debug build-nojit build-debug-nojit
