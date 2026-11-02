@@ -555,3 +555,35 @@ layout then matches upstream's byte for byte (`c8` 0, `hmap4` 4, `p` 8, `h`
 1032, `z` 2056, `comp` 2064, `initTables` 30736, …), which keeps the component
 stride and the hot tables on the same cache lines; `-m4` on text went from
 88 % to 92 %.
+
+## E20: exit codes, UTC dates, truncated streaming archives
+
+The last known fidelity gap (`docs/DEVIATIONS.md`) is closed:
+
+* **Exit codes on corrupt archives.** `list` always returns 0 and does not check
+  the scan result; `extract` raises `archive not found` when the scan returns
+  nothing and otherwise returns 1 only when some file could not be extracted
+  completely.  Skipped blocks are counted by `add` alone, and `extract -index`
+  returns 0 once the index is written.  Previously the port mapped any read
+  error to 1, so truncated archives that upstream extracts happily returned 1.
+
+* **Transaction dates.** `add` used `DateTimeToUnix(Now)`, which treats the
+  local `TDateTime` as UTC in FPC, so the C block name carried local time.
+  It now passes `InputIsUTC = False`, so archives are identical regardless of
+  `TZ` and match upstream's `gmtime`-based date.  The tests never noticed
+  because they all freeze the clock; `tests/cli.sh` now checks the date in the
+  archive against the real UTC clock.
+
+* **Truncated streaming archives (two bugs).** `TFileData` did not free its
+  `TFileStream`, so every extracted segment kept the output file open *and
+  locked*; when the decompresser resynchronised on garbage after a truncated
+  block and produced a third segment, the `fmCreate` for an already-locked file
+  failed with `Unable to create file ... Bad file number`.  `TFileData` now
+  frees the stream.  On top of that, the streaming extractor stops once the
+  decompresser is past `lastOffset` (the end of what `read_archive` could scan),
+  so it no longer invents segments that upstream never sees.
+
+`tests/fuzz.py` is now deterministic: the corpus files get a fixed mtime and the
+base archives are built with the clock shim (`faketime.so`, or `ZPAQII_NOW`), so
+every run mutates the same bytes.  Exit-code disagreements are counted as
+failures instead of warnings: 204 cases, **0 failures**.

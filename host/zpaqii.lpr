@@ -34,9 +34,16 @@ type
   TFileData = class
   public
     Stream: TFileStream;
+    destructor Destroy; override;
     procedure Put(c: LongInt);
     procedure WriteBuf(buf: PAnsiChar; len: LongInt);
   end;
+
+destructor TFileData.Destroy;
+begin
+  Stream.Free;   { close (and unlock) the previous segment's output }
+  inherited;
+end;
 
 procedure TFileData.Put(c: LongInt);
 var
@@ -272,6 +279,10 @@ begin
       rc := zq_d_find_block(d, nil);
       if rc < 0 then Fail(string(zq_last_error));
       if rc = 0 then Break;
+      { Only extract what read_archive could scan: after a truncated block the
+        decompresser can resynchronise on garbage and invent segments that
+        upstream never sees (it walks the scanned block list). }
+      if (inArc.Tell() - zq_d_buffered(d)) >= j.lastOffset then Break;
       while True do
       begin
         GName := '';
@@ -313,6 +324,7 @@ function RunExtract(j: TJidac; listOnly, force: Boolean): Integer;
 var
   errors: Integer;
   nfiles: Cardinal;
+  sz: Int64;
 begin
   { -repack -all copies the whole archive before reading it (upstream). }
   if (not listOnly) and (j.repack <> '') and (j.all > 0) then
@@ -320,12 +332,15 @@ begin
     Result := j.RepackWhole(force);
     Exit;
   end;
-  j.ReadArchive(errors, nfiles);
+  sz := j.ReadArchive(errors, nfiles);
+  { extract() checks the scan result before doing anything else; list() does
+    not, so a truncated archive still lists (upstream). }
+  if (not listOnly) and (sz < 1) then
+    raise Exception.Create('archive not found');
+  { Read errors (skipped blocks) only affect the exit code of add: extract()
+    and the -index path ignore them, and list() always returns 0. }
   if (j.indexName <> '') and (not listOnly) then
-  begin
-    Result := j.WriteIndex(j.indexName, force);
-    if errors <> 0 then Result := 1;
-  end
+    Result := j.WriteIndex(j.indexName, force)
   else if listOnly then
   begin
     j.List(force);        { tolerant: works for streaming and journaling }
@@ -336,10 +351,7 @@ begin
     if j.repack <> '' then
       Result := j.RepackSelected(force)
     else
-    begin
-      Result := j.Extract(force, j.dotest);
-      if errors <> 0 then Result := 1;
-    end;
+      Result := Ord(j.Extract(force, j.dotest) > 0);
   end
   else if j.repack <> '' then
     Result := j.RepackSelected(force)   { errors out, like upstream }
@@ -597,7 +609,7 @@ begin
     begin
       a := GetEnvironmentVariable('ZPAQII_NOW');
       if a <> '' then dateVal := DecimalTime(StrToInt64(a))
-      else dateVal := DecimalTime(DateTimeToUnix(Now));
+      else dateVal := DecimalTime(DateTimeToUnix(Now, False));
     end;
     if (archive <> '') and (ExtractFileExt(archive) = '') then
       archive := archive + '.zpaq';
@@ -617,7 +629,7 @@ begin
         if a <> '' then
           dateVal := DecimalTime(StrToInt64(a))
         else
-          dateVal := DecimalTime(DateTimeToUnix(Now));
+          dateVal := DecimalTime(DateTimeToUnix(Now, False));
       end;
       begin
         jadd := TJidac.Create(archive, key, DEFAULT_VERSION);

@@ -5,7 +5,8 @@ Generates corrupted/truncated variants of valid archives and runs both
 implementations on them.  Criteria:
   * the port must never die on a signal (segfault/abort) unless upstream does;
   * when upstream succeeds (exit 0), the port must also succeed;
-  * when both succeed, the listed file set must match.
+  * when both succeed, the listed file set must match;
+  * extraction must agree on success vs failure (exit code 0 or not).
 
 Usage: fuzz.py <upstream-zpaq> <zpaqii> <workdir> [rounds]
 """
@@ -24,10 +25,10 @@ TIMEOUT = 60
 random.seed(20261101)
 
 
-def run(binary, args):
+def run(binary, args, env=None):
     try:
         p = subprocess.run([binary] + args, capture_output=True,
-                           timeout=TIMEOUT)
+                           timeout=TIMEOUT, env=env)
         return p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
         return "timeout", b"", b""
@@ -79,6 +80,20 @@ def main():
         f.write(bytes(r.randrange(256) for _ in range(50000)))
     with open("small.txt", "wb") as f:
         f.write(b"small file\n")
+    # Fixed mtimes and a frozen clock so the base archives are byte-identical
+    # on every run: the mutations (and therefore the whole test) are
+    # deterministic.  The clock shim lives next to the port binary.
+    fixed = 1767225600  # 2026-01-01 00:00:00 UTC
+    for fn in ("text.txt", "bin.dat", "small.txt"):
+        os.utime(fn, (fixed, fixed))
+    shim = os.path.join(os.path.dirname(PORT), "faketime.so")
+    base_env = dict(os.environ)
+    if os.path.exists(shim):
+        base_env["LD_PRELOAD"] = shim
+        base_env["FAKE_TIME"] = str(fixed)
+        base_env["ZPAQII_NOW"] = str(fixed)
+    else:
+        print("note: no faketime.so, base archives depend on the clock")
 
     bases = {}
     for name, args in (
@@ -89,7 +104,8 @@ def main():
         ("journal5", ["add", "journal5.zpaq", "text.txt", "small.txt",
                       "-m5", "-t1"]),
     ):
-        subprocess.run([UP] + args, capture_output=True, timeout=120)
+        subprocess.run([UP] + args, capture_output=True, timeout=120,
+                       env=base_env)
         try:
             bases[name] = open(args[1], "rb").read()
         except OSError:
@@ -98,7 +114,6 @@ def main():
 
     fails = 0
     cases = 0
-    rcdiv = 0
     for name, data in bases.items():
         for n in range(ROUNDS):
             kind = n % 4
@@ -153,11 +168,9 @@ def main():
             if up_crash:
                 continue
             if (ru == 0) != (rp == 0):
-                # Known divergence: error accounting on corrupt archives is
-                # not identical yet (see docs/DEVIATIONS.md).  Not a crash.
-                print("warn RC extract %s case %d: upstream %s, port %s"
+                print("RC extract %s case %d: upstream %s, port %s"
                       % (name, n, ru, rp))
-                rcdiv += 1
+                fails += 1
                 continue
             if ru == 0:
                 fu = sorted(os.listdir("xu"))
@@ -167,8 +180,7 @@ def main():
                           % (name, n, fu, fp))
                     fails += 1
 
-    print("fuzz: %d cases, %d failures, %d exit-code divergences"
-          % (cases, fails, rcdiv))
+    print("fuzz: %d cases, %d failures" % (cases, fails))
     return 1 if fails else 0
 
 

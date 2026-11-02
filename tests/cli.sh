@@ -402,6 +402,24 @@ else
   bad "empty archive name (dry run)"
 fi
 
+# ---- add stamps the transaction with UTC, like upstream ----
+rm -rf tzd
+mkdir tzd
+cd tzd || exit 1
+printf 'tz\n' > f.txt
+TZ=US/Alaska "$P" add t.zpaq f.txt -m1 >/dev/null 2>&1
+ts=$(head -c 160 t.zpaq | tr -c '[:print:]' '\n' |
+     sed -n 's/^jDC\([0-9][0-9]*\)c.*/\1/p' | head -1)
+iso=$(printf '%s' "$ts" |
+      sed -E 's/^(....)(..)(..)(..)(..)(..)$/\1-\2-\3 \4:\5:\6/')
+delta=$(( $(date -u -d "$iso" +%s) - $(date +%s) ))
+if [ -n "$ts" ] && [ "$delta" -ge -5 ] && [ "$delta" -le 5 ]; then
+  ok
+else
+  bad "add date is not UTC (ts=$ts delta=$delta)"
+fi
+cd ..
+
 # ---- -repack F [X]: rewrite the archive into a new file ----
 repack_both() {  # name, new key (may be empty), args...
   local n=$1 nk=$2
