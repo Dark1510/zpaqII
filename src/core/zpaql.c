@@ -163,9 +163,9 @@ void zq_zpaql_outc(zq_zpaql *z, int ch) {
 
 void zq_zpaql_run(zq_zpaql *z, zq_u32 input) {
 #ifndef ZQ_NOJIT
-  /* JIT path: compile once per program, then call the generated code.  The
-   * emitter is not ported yet, so zq_zpaql_assemble() returns 0 and we always
-   * fall back to the interpreter (identical semantics). */
+  /* JIT path: compile once per program, then call the generated code.  When
+   * no code is produced (or the target has no JIT, see zq_internal.h) the
+   * loop below runs instead; both produce identical results. */
   if (!z->rcode) {
     int need = 0;
     if (z->hend > z->hbegin) need = zq_zpaql_assemble(z);
@@ -192,14 +192,268 @@ void zq_zpaql_run(zq_zpaql *z, zq_u32 input) {
     return;
   }
 #endif
-  z->pc = z->hbegin;
-  z->a = input;
-  while (zq_zpaql_execute(z)) {
-  }
+  zq_zpaql_run_interp(z, input);
 }
 
 static void zq_div(zq_u32 *a, zq_u32 x) { *a = x ? *a / x : 0; }
 static void zq_mod(zq_u32 *a, zq_u32 x) { *a = x ? *a % x : 0; }
+
+/* ZPAQL(II): the interpreter loop.  Same instruction set, same semantics as
+ * zq_zpaql_execute() below (which stays as the one-step reference the
+ * differential test compares against), but the state lives in locals for the
+ * whole run instead of in the struct: one dispatch per instruction and no
+ * memory traffic between them. */
+void zq_zpaql_run_interp(zq_zpaql *z, zq_u32 input) {
+  int pc = z->hbegin;
+  zq_u32 a = input, b = z->b, c = z->c, d = z->d;
+  int f = z->f;
+
+  for (;;) {
+    const int op = ZQ_HDR(z, pc);
+    ++pc;
+    switch (op) {
+    case 0: zq_zpaql_err(); break;
+    case 1: ++a; break;
+    case 2: --a; break;
+    case 3: a = ~a; break;
+    case 4: a = 0; break;
+    case 7: a = ZQ_R(z, ZQ_HDR(z, pc++)); break;
+    case 8: { zq_u32 t = b; b = a; a = t; } break;
+    case 9: ++b; break;
+    case 10: --b; break;
+    case 11: b = ~b; break;
+    case 12: b = 0; break;
+    case 15: b = ZQ_R(z, ZQ_HDR(z, pc++)); break;
+    case 16: { zq_u32 t = c; c = a; a = t; } break;
+    case 17: ++c; break;
+    case 18: --c; break;
+    case 19: c = ~c; break;
+    case 20: c = 0; break;
+    case 23: c = ZQ_R(z, ZQ_HDR(z, pc++)); break;
+    case 24: { zq_u32 t = d; d = a; a = t; } break;
+    case 25: ++d; break;
+    case 26: --d; break;
+    case 27: d = ~d; break;
+    case 28: d = 0; break;
+    case 31: d = ZQ_R(z, ZQ_HDR(z, pc++)); break;
+    /* Swapping with *b or *c exchanges only the low byte of a (upstream's
+     * swap(U8&) is a^=x; x^=a; a^=x with x zero extended), so the high 24
+     * bits of a are preserved. */
+    case 32: { zq_u8 t = ZQ_M(z, b); ZQ_M(z, b) = (zq_u8)a;
+               a = (a & 0xffffff00u) | (zq_u32)t; } break;
+    case 33: ZQ_M(z, b) = (zq_u8)(ZQ_M(z, b) + 1); break;
+    case 34: ZQ_M(z, b) = (zq_u8)(ZQ_M(z, b) - 1); break;
+    case 35: ZQ_M(z, b) = (zq_u8)~ZQ_M(z, b); break;
+    case 36: ZQ_M(z, b) = 0; break;
+    case 39:
+      if (f) pc += ((ZQ_HDR(z, pc) + 128) & 255) - 127;
+      else ++pc;
+      break;
+    case 40: { zq_u8 t = ZQ_M(z, c); ZQ_M(z, c) = (zq_u8)a;
+               a = (a & 0xffffff00u) | (zq_u32)t; } break;
+    case 41: ZQ_M(z, c) = (zq_u8)(ZQ_M(z, c) + 1); break;
+    case 42: ZQ_M(z, c) = (zq_u8)(ZQ_M(z, c) - 1); break;
+    case 43: ZQ_M(z, c) = (zq_u8)~ZQ_M(z, c); break;
+    case 44: ZQ_M(z, c) = 0; break;
+    case 47:
+      if (!f) pc += ((ZQ_HDR(z, pc) + 128) & 255) - 127;
+      else ++pc;
+      break;
+    case 48: { zq_u32 t = ZQ_H(z, d); ZQ_H(z, d) = a;
+               a = t; } break;
+    case 49: ++ZQ_H(z, d); break;
+    case 50: --ZQ_H(z, d); break;
+    case 51: ZQ_H(z, d) = ~ZQ_H(z, d); break;
+    case 52: ZQ_H(z, d) = 0; break;
+    case 55: ZQ_R(z, ZQ_HDR(z, pc++)) = a; break;
+    case 56: goto done;
+    case 57: zq_zpaql_outc(z, (int)(a & 255)); break;
+    case 59: a = (a + ZQ_M(z, b) + 512) * 773; break;
+    case 60: ZQ_H(z, d) = (ZQ_H(z, d) + a + 512) * 773; break;
+    case 63: pc += ((ZQ_HDR(z, pc) + 128) & 255) - 127; break;
+    case 64: break;
+    case 65: a = b; break;
+    case 66: a = c; break;
+    case 67: a = d; break;
+    case 68: a = ZQ_M(z, b); break;
+    case 69: a = ZQ_M(z, c); break;
+    case 70: a = ZQ_H(z, d); break;
+    case 71: a = ZQ_HDR(z, pc++); break;
+    case 72: b = a; break;
+    case 73: break;
+    case 74: b = c; break;
+    case 75: b = d; break;
+    case 76: b = ZQ_M(z, b); break;
+    case 77: b = ZQ_M(z, c); break;
+    case 78: b = ZQ_H(z, d); break;
+    case 79: b = ZQ_HDR(z, pc++); break;
+    case 80: c = a; break;
+    case 81: c = b; break;
+    case 82: break;
+    case 83: c = d; break;
+    case 84: c = ZQ_M(z, b); break;
+    case 85: c = ZQ_M(z, c); break;
+    case 86: c = ZQ_H(z, d); break;
+    case 87: c = ZQ_HDR(z, pc++); break;
+    case 88: d = a; break;
+    case 89: d = b; break;
+    case 90: d = c; break;
+    case 91: break;
+    case 92: d = ZQ_M(z, b); break;
+    case 93: d = ZQ_M(z, c); break;
+    case 94: d = ZQ_H(z, d); break;
+    case 95: d = ZQ_HDR(z, pc++); break;
+    case 96: ZQ_M(z, b) = (zq_u8)a; break;
+    case 97: ZQ_M(z, b) = (zq_u8)b; break;
+    case 98: ZQ_M(z, b) = (zq_u8)c; break;
+    case 99: ZQ_M(z, b) = (zq_u8)d; break;
+    case 100: break;
+    case 101: ZQ_M(z, b) = ZQ_M(z, c); break;
+    case 102: ZQ_M(z, b) = (zq_u8)ZQ_H(z, d); break;
+    case 103: ZQ_M(z, b) = ZQ_HDR(z, pc++); break;
+    case 104: ZQ_M(z, c) = (zq_u8)a; break;
+    case 105: ZQ_M(z, c) = (zq_u8)b; break;
+    case 106: ZQ_M(z, c) = (zq_u8)c; break;
+    case 107: ZQ_M(z, c) = (zq_u8)d; break;
+    case 108: ZQ_M(z, c) = ZQ_M(z, b); break;
+    case 109: break;
+    case 110: ZQ_M(z, c) = (zq_u8)ZQ_H(z, d); break;
+    case 111: ZQ_M(z, c) = ZQ_HDR(z, pc++); break;
+    case 112: ZQ_H(z, d) = a; break;
+    case 113: ZQ_H(z, d) = b; break;
+    case 114: ZQ_H(z, d) = c; break;
+    case 115: ZQ_H(z, d) = d; break;
+    case 116: ZQ_H(z, d) = ZQ_M(z, b); break;
+    case 117: ZQ_H(z, d) = ZQ_M(z, c); break;
+    case 118: break;
+    case 119: ZQ_H(z, d) = ZQ_HDR(z, pc++); break;
+    case 128: a += a; break;
+    case 129: a += b; break;
+    case 130: a += c; break;
+    case 131: a += d; break;
+    case 132: a += ZQ_M(z, b); break;
+    case 133: a += ZQ_M(z, c); break;
+    case 134: a += ZQ_H(z, d); break;
+    case 135: a += ZQ_HDR(z, pc++); break;
+    case 136: a -= a; break;
+    case 137: a -= b; break;
+    case 138: a -= c; break;
+    case 139: a -= d; break;
+    case 140: a -= ZQ_M(z, b); break;
+    case 141: a -= ZQ_M(z, c); break;
+    case 142: a -= ZQ_H(z, d); break;
+    case 143: a -= ZQ_HDR(z, pc++); break;
+    case 144: a *= a; break;
+    case 145: a *= b; break;
+    case 146: a *= c; break;
+    case 147: a *= d; break;
+    case 148: a *= ZQ_M(z, b); break;
+    case 149: a *= ZQ_M(z, c); break;
+    case 150: a *= ZQ_H(z, d); break;
+    case 151: a *= ZQ_HDR(z, pc++); break;
+    case 152: zq_div(&a, a); break;
+    case 153: zq_div(&a, b); break;
+    case 154: zq_div(&a, c); break;
+    case 155: zq_div(&a, d); break;
+    case 156: zq_div(&a, ZQ_M(z, b)); break;
+    case 157: zq_div(&a, ZQ_M(z, c)); break;
+    case 158: zq_div(&a, ZQ_H(z, d)); break;
+    case 159: zq_div(&a, ZQ_HDR(z, pc++)); break;
+    case 160: zq_mod(&a, a); break;
+    case 161: zq_mod(&a, b); break;
+    case 162: zq_mod(&a, c); break;
+    case 163: zq_mod(&a, d); break;
+    case 164: zq_mod(&a, ZQ_M(z, b)); break;
+    case 165: zq_mod(&a, ZQ_M(z, c)); break;
+    case 166: zq_mod(&a, ZQ_H(z, d)); break;
+    case 167: zq_mod(&a, ZQ_HDR(z, pc++)); break;
+    case 168: a &= a; break;
+    case 169: a &= b; break;
+    case 170: a &= c; break;
+    case 171: a &= d; break;
+    case 172: a &= ZQ_M(z, b); break;
+    case 173: a &= ZQ_M(z, c); break;
+    case 174: a &= ZQ_H(z, d); break;
+    case 175: a &= ZQ_HDR(z, pc++); break;
+    case 176: a &= ~a; break;
+    case 177: a &= ~b; break;
+    case 178: a &= ~c; break;
+    case 179: a &= ~d; break;
+    case 180: a &= ~(zq_u32)ZQ_M(z, b); break;
+    case 181: a &= ~(zq_u32)ZQ_M(z, c); break;
+    case 182: a &= ~ZQ_H(z, d); break;
+    case 183: a &= ~(zq_u32)ZQ_HDR(z, pc++); break;
+    case 184: a |= a; break;
+    case 185: a |= b; break;
+    case 186: a |= c; break;
+    case 187: a |= d; break;
+    case 188: a |= ZQ_M(z, b); break;
+    case 189: a |= ZQ_M(z, c); break;
+    case 190: a |= ZQ_H(z, d); break;
+    case 191: a |= ZQ_HDR(z, pc++); break;
+    case 192: a ^= a; break;
+    case 193: a ^= b; break;
+    case 194: a ^= c; break;
+    case 195: a ^= d; break;
+    case 196: a ^= ZQ_M(z, b); break;
+    case 197: a ^= ZQ_M(z, c); break;
+    case 198: a ^= ZQ_H(z, d); break;
+    case 199: a ^= ZQ_HDR(z, pc++); break;
+    case 200: a <<= (a & 31); break;
+    case 201: a <<= (b & 31); break;
+    case 202: a <<= (c & 31); break;
+    case 203: a <<= (d & 31); break;
+    case 204: a <<= (ZQ_M(z, b) & 31); break;
+    case 205: a <<= (ZQ_M(z, c) & 31); break;
+    case 206: a <<= (ZQ_H(z, d) & 31); break;
+    case 207: a <<= (ZQ_HDR(z, pc++) & 31); break;
+    case 208: a >>= (a & 31); break;
+    case 209: a >>= (b & 31); break;
+    case 210: a >>= (c & 31); break;
+    case 211: a >>= (d & 31); break;
+    case 212: a >>= (ZQ_M(z, b) & 31); break;
+    case 213: a >>= (ZQ_M(z, c) & 31); break;
+    case 214: a >>= (ZQ_H(z, d) & 31); break;
+    case 215: a >>= (ZQ_HDR(z, pc++) & 31); break;
+    case 216: f = 1; break;
+    case 217: f = (a == b); break;
+    case 218: f = (a == c); break;
+    case 219: f = (a == d); break;
+    case 220: f = (a == (zq_u32)ZQ_M(z, b)); break;
+    case 221: f = (a == (zq_u32)ZQ_M(z, c)); break;
+    case 222: f = (a == ZQ_H(z, d)); break;
+    case 223: f = (a == (zq_u32)ZQ_HDR(z, pc++)); break;
+    case 224: f = 0; break;
+    case 225: f = (a < b); break;
+    case 226: f = (a < c); break;
+    case 227: f = (a < d); break;
+    case 228: f = (a < (zq_u32)ZQ_M(z, b)); break;
+    case 229: f = (a < (zq_u32)ZQ_M(z, c)); break;
+    case 230: f = (a < ZQ_H(z, d)); break;
+    case 231: f = (a < (zq_u32)ZQ_HDR(z, pc++)); break;
+    case 232: f = 0; break;
+    case 233: f = (a > b); break;
+    case 234: f = (a > c); break;
+    case 235: f = (a > d); break;
+    case 236: f = (a > (zq_u32)ZQ_M(z, b)); break;
+    case 237: f = (a > (zq_u32)ZQ_M(z, c)); break;
+    case 238: f = (a > ZQ_H(z, d)); break;
+    case 239: f = (a > (zq_u32)ZQ_HDR(z, pc++)); break;
+    case 255:
+      pc = z->hbegin + ZQ_HDR(z, pc) + 256 * ZQ_HDR(z, pc + 1);
+      if (pc >= z->hend) zq_zpaql_err();
+      break;
+      default: zq_zpaql_err();
+    }
+  }
+done:
+  z->pc = pc;
+  z->a = a;
+  z->b = b;
+  z->c = c;
+  z->d = d;
+  z->f = f;
+}
 
 int zq_zpaql_execute(zq_zpaql *z) {
   const int pc0 = z->pc;

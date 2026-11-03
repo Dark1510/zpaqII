@@ -31,7 +31,7 @@ BUILD    := build$(if $(DEBUG),-debug,)$(if $(NOJIT),-nojit,)
 CORE_SRC := $(wildcard src/core/*.c)
 CORE_OBJ := $(patsubst src/core/%.c,$(BUILD)/obj/%.o,$(CORE_SRC))
 
-.PHONY: all lib test test-e1 test-sha1hw test-fragchain test-digest test-lz4 cross win64 win32 oracle clean info
+.PHONY: all lib test test-e1 test-sha1hw test-fragchain test-digest test-lz4 test-zpaqldif zdis cross win64 win32 oracle clean info
 
 all: lib test
 
@@ -98,6 +98,14 @@ $(BUILD)/lz4test: tests/unit/lz4.c $(BUILD)/libzqcore.a
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(if $(LZ4_CFG),-DHAVE_LZ4) $< \
 	  $(BUILD)/libzqcore.a $(LZ4_CFG) $(LDFLAGS) -o $@
 
+# ZPAQL(II): the new run loop against the one-step reference interpreter
+test-zpaqldif: $(BUILD)/zpaql_dif $(BUILD)/e2_manifest.txt
+	@$(BUILD)/zpaql_dif $(BUILD)/e2_manifest.txt
+
+$(BUILD)/zpaql_dif: tests/unit/zpaql_dif.c $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Isrc/core $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
+
 test-digest: $(BUILD)/digest
 	@$(BUILD)/digest
 
@@ -119,6 +127,14 @@ $(BUILD)/sha1_hw: tests/unit/sha1_hw.c $(BUILD)/libzqcore.a
 # Every target we can compile for, and every test we can run here.
 cross: $(BUILD)/e1_upstream.txt
 	@tools/cross.sh
+
+# ZPAQL(II) tooling: disassembler and static verifier.
+zdis: $(BUILD)/zdis
+	@true
+
+$(BUILD)/zdis: tools/zdis.c $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Isrc/core $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
 
 # Windows builds from Linux (mingw + FPC with the win64 units).
 win64:

@@ -1031,3 +1031,40 @@ always literals and a match may not start within the last twelve, or
 
 Next: the ZPAQL decoder for this format, the block framing (`comp 0 0 ph pm 0`,
 stored payload + PCOMP), and the `-ma:lz4[:N]` switch.
+
+---
+
+# ZPAQL(II): same instruction set, new engine
+
+`docs/ZPAQL.md` is the reference; this is the log.
+
+## Phase A: the interpreter loop
+
+The interpreter stepped one instruction per call with all the state in the
+struct (`zq_zpaql_execute`), so every instruction cost a dispatch plus six
+memory accesses.  `zq_zpaql_run_interp()` keeps `a, b, c, d, f, pc` in locals
+for the whole input byte and writes them back at `HALT`.
+
+The old stepper stays as `zq_zpaql_execute()`: it is the one-step reference the
+new differential test (`make test-zpaqldif`) compares against, byte by byte,
+after every input, on the 26 real configs of the E2 manifest plus ten method
+configs.
+
+Extraction of 30 MB of text, `taskset -c 7`, min of 3, interpreter-only build:
+
+| archive | before | now | speed-up |
+|---|---|---|---|
+| `-m1` | 2.49 s | 1.12 s | 2.2× |
+| `-m2` | 2.02 s | 0.88 s | 2.3× |
+| `-m4` | 14.20 s | 11.76 s | 1.2× |
+| `-m5` | 116.98 s | 104.66 s | 1.1× |
+
+`-m1`/`-m2` are the ZPAQL-heavy methods, and that is exactly what the engine
+change targets: ARM64, Windows and `NOJIT` builds, where there is no JIT.
+
+## Tooling: `zdis`
+
+`make zdis` builds a disassembler and static verifier for ZPAQL programs
+(`zdis -m x4`, `zdis file.conf`): offsets, mnemonics, and warnings for jumps
+outside the program, missing operands and invalid opcodes.  It is the tool the
+ZPAQL decoder of phase 2.4 needs.

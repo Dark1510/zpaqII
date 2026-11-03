@@ -83,6 +83,7 @@ int zq_zpaql_write(zq_zpaql *z, zq_writer *out, int pp);
 void zq_zpaql_flush(zq_zpaql *z);
 void zq_zpaql_outc(zq_zpaql *z, int ch);
 int zq_zpaql_execute(zq_zpaql *z);
+void zq_zpaql_run_interp(zq_zpaql *z, zq_u32 input);
 
 /* JIT: executable memory and code generation (see src/core/jit.c). */
 void zq_allocx(zq_u8 **p, int *n, int newsize);
