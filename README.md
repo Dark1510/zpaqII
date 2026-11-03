@@ -24,6 +24,26 @@ The idea for zpaqII came from this encode.su forum thread:
 
 ## Status
 
+| Component | Status |
+|---|---|
+| CI | [![ci](https://github.com/YadeWira/zpaqII/actions/workflows/ci.yml/badge.svg)](https://github.com/YadeWira/zpaqII/actions/workflows/ci.yml) |
+| Latest release | not published yet |
+| C core (`src/core`) | ✅ bit-exact with 7.15 |
+| Pascal host (`host/`) | ✅ add, extract, list, test, check |
+| ZPAQL VM, interpreter | ✅ ZPAQL(II) phase A (`docs/ZPAQL.md`) |
+| ZPAQL VM, JIT | ✅ x86-64 Linux only |
+| Predictor JIT | ✅ x86-64 Linux only |
+| Hardware SHA-1 | ✅ x86 SHA-NI; ARMv8 pending |
+| Turbo fragmenter (`-turbo`) | ✅ |
+| Digests (`-hash`, `check`) | ✅ |
+| LZ4 codec | 🚧 core codec done; ZPAQ block support pending (2.4b) |
+| Linux x86-64 / arm64 | ✅ CI |
+| Windows x64 | ✅ tested in Win7 and Win10 VMs |
+| Windows x86 host | ⏳ needs FPC on Windows |
+| macOS arm64 | ✅ CI builds; CLI tests pending |
+
+Stages:
+
 | stage | content | state |
 |---|---|---|
 | E0 | infrastructure, oracle (upstream build), corpus | ✅ |
