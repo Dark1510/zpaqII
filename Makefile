@@ -31,7 +31,7 @@ BUILD    := build$(if $(DEBUG),-debug,)$(if $(NOJIT),-nojit,)
 CORE_SRC := $(wildcard src/core/*.c)
 CORE_OBJ := $(patsubst src/core/%.c,$(BUILD)/obj/%.o,$(CORE_SRC))
 
-.PHONY: all lib test test-e1 test-sha1hw test-fragchain test-digest test-lz4 test-zpaqldif zdis cross win64 win32 oracle clean info
+.PHONY: all lib test test-e1 test-sha1hw test-fragchain test-digest test-lz4 test-lz4pcomp test-zpaqldif zdis cross win64 win32 oracle clean info
 
 all: lib test
 
@@ -52,7 +52,7 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h src/core/zq_internal.h
 
 # ---------------- tests ----------------
 
-test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c test-e18 test-e6d test-sha1hw test-fragchain test-digest test-lz4
+test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c test-e18 test-e6d test-sha1hw test-fragchain test-digest test-lz4 test-lz4pcomp
 	@echo "== E1 (hash/AES/scrypt): OK =="
 	@echo "== E2 (ZPAQL VM + compiler): OK =="
 	@echo "== E3 (predictor + coder): OK =="
@@ -97,6 +97,14 @@ $(BUILD)/lz4test: tests/unit/lz4.c $(BUILD)/libzqcore.a
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(if $(LZ4_CFG),-DHAVE_LZ4) $< \
 	  $(BUILD)/libzqcore.a $(LZ4_CFG) $(LDFLAGS) -o $@
+
+# The LZ4 decoder written in ZPAQL, run by the real postprocessor
+test-lz4pcomp: $(BUILD)/lz4_pcomp_test
+	@$(BUILD)/lz4_pcomp_test
+
+$(BUILD)/lz4_pcomp_test: tests/unit/lz4_pcomp_test.c $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Isrc/core $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
 
 # ZPAQL(II): the new run loop against the one-step reference interpreter
 test-zpaqldif: $(BUILD)/zpaql_dif $(BUILD)/e2_manifest.txt

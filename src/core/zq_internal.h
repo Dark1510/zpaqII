@@ -341,6 +341,11 @@ extern const char *const zq_opcodelist[272];
 /* Method string -> config text (libzpaq::makeConfig).  Caller frees. */
 char *zq_make_config(const char *method, int args[9]);
 
+/* LZ4 block decoder as a ZPAQL program (phase 2.4b): the PCOMP a block carries
+ * when its payload is an LZ4 block.  Returns the program text, starting at
+ * "pcomp" and ending at "end". */
+const char *zq_lz4_pcomp_program(void);
+
 /* ZPAQL compiler (text -> bytecode).  Equivalent to libzpaq::Compiler. */
 void zq_compile(const char *in, int *args, zq_zpaql *hz, zq_zpaql *pz,
                 zq_writer *out2);

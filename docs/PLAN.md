@@ -1068,3 +1068,37 @@ change targets: ARM64, Windows and `NOJIT` builds, where there is no JIT.
 (`zdis -m x4`, `zdis file.conf`): offsets, mnemonics, and warnings for jumps
 outside the program, missing operands and invalid opcodes.  It is the tool the
 ZPAQL decoder of phase 2.4 needs.
+
+## 2.4b: the LZ4 decoder in ZPAQL
+
+The point of choosing LZ4 was that its block format is small enough to be
+decoded by a ZPAQL program.  That program now exists
+(`src/core/lz4_pcomp.c`, `zq_lz4_pcomp_program()`): it is fed the compressed
+block one byte per call, writes the plaintext with `out` and keeps the 64 KB
+history in M (`pm = 16`).  It is what a block will carry as its PCOMP, so plain
+zpaq 7.15 extracts an LZ4 block from our archives by running the VM, with
+nothing of ours installed.
+
+Three things the first drafts got wrong, all found by running the program in the
+real postprocessor rather than reasoning about it:
+
+1. **A PCOMP must end in `halt`.**  Falling off the end runs into the zero
+   padding, which is the `error` opcode.  The program now halts at the end of
+   every input byte.
+2. **The counters are 32-bit, not 16.**  Only a match's *offset* is limited to
+   64 KB; a match or a literal run can be as long as the block.  With a 16-bit
+   counter, the 1 MB periodic-text case produced 300 bytes: the length wrapped.
+   A ZPAQL register is 8 bits, so the counter lives in four registers and every
+   add/subtract carries explicitly.  A single `a--` at zero wraps to
+   0xFFFFFFFF, which is how the first version hung instead of failing.
+3. **Register operands are written without a space** (`a+=d`), immediates with
+   one (`a+= 4`).  `a+= d` is parsed as "add the number d" and fails.
+
+Verification: `make test-lz4pcomp` compresses buffers with our encoder and runs
+the block through `zq_pp_write`, the same postprocessor a block goes through,
+comparing the output with the original.  34 cases: empty, 1 byte, every
+extension-length boundary, 4 KB, 65535, 65536, 65836, 1 MB and 1 MB + 70000, for
+periodic text and random data.  All pass with the interpreter and with the JIT.
+
+`zdis` grew one fix along the way: the target of `lj` is relative to `hbegin`,
+like the interpreter computes it, not an absolute offset.

@@ -88,7 +88,7 @@ static void disasm(const char *what, const zq_u8 *code, int begin, int end) {
         continue;
       }
       {
-        const int target = code[at + 1] + 256 * code[at + 2];
+        const int target = begin + code[at + 1] + 256 * code[at + 2];
         printf(" %d", target);
         if (target < begin || target >= end) {
           printf("   <jump outside the program: %d>", target);
