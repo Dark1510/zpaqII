@@ -16,6 +16,7 @@ The idea for zpaqII came from this encode.su forum thread:
 
 ## Documentation
 
+- `docs/STATUS.md` — **what the project is, where it stands and what is left**
 - [Wiki](https://github.com/YadeWira/zpaqII/wiki) — what it is, extensions, platforms, roadmap
 - `docs/ZPAQL.md` — **ZPAQL(II)**, the VM engine: same instruction set, new engine
 - `docs/PLAN.md` — stages, acceptance criteria, risks.
