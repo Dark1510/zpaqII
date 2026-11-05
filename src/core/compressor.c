@@ -169,8 +169,7 @@ int zq_c_compress(zq_compressor *c, int n) {
       /* stored block: bulk copy, and SHA-1 in bulk when there is no PCOMP */
       if (c->verify) {
         if (c->pz.hend) {
-          for (i = 0; i < nr; ++i)
-            zq_zpaql_run(&c->pz, (zq_u32)(zq_u8)buf[i]);
+          zq_zpaql_run_buf(&c->pz, (const zq_u8 *)buf, nr);
         } else {
           zq_sha1_write(&c->sha1, buf, nr);
         }

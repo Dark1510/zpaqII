@@ -343,6 +343,7 @@ int zq_pred_jit_build(zq_predictor *pr) {
     zq_allocx(&pr->pcode, &pr->pcode_size, 0);
     return 0;
   }
+  zq_allocx_seal(pr->pcode, pr->pcode_size);
   return 1;
 }
 #endif

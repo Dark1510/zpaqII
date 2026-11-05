@@ -121,6 +121,34 @@ static int zq_d_read_comment_impl(zq_decompresser *d, zq_writer *comment) {
   return 1;
 }
 
+/* Decode up to lim bytes into buf, stopping at the first c < 0 (end of
+ * segment), which is returned; *k is the number of bytes stored.  The PCOMP
+ * then sees the same bytes in the same order as with one call per byte.  If
+ * decoding fails part-way, the bytes decoded before the failure still reach
+ * the postprocessor first and the same error is raised again, so whether an
+ * error is reported, and which one, is exactly as before. */
+static int zq_d_fill(zq_decompresser *d, zq_u8 *buf, int lim, int *kout) {
+  volatile int k = 0;
+  int c = 0;
+  zq_err_frame ef;
+  if (setjmp(ef.jb)) {
+    char msg[sizeof(ef.msg)];
+    memcpy(msg, ef.msg, sizeof(msg));
+    zq_pp_write_buf(&d->pp, buf, k);
+    zq_error(msg);
+  }
+  zq_err_push(&ef);
+  while (k < lim) {
+    c = zq_dec_decompress(&d->dec);
+    if (c < 0) break;
+    buf[k] = (zq_u8)c;
+    k = k + 1;
+  }
+  zq_err_pop(&ef);
+  *kout = k;
+  return c;
+}
+
 /* Decompress n bytes, or all when n < 0.  Returns 0 when the segment ends. */
 static int zq_d_decompress_impl(zq_decompresser *d, int n) {
   if (d->decode_state == ZQ_SKIP) zq_error("decompression after skipped segment");
@@ -136,14 +164,24 @@ static int zq_d_decompress_impl(zq_decompresser *d, int n) {
   /* Decompress and load PCOMP into the postprocessor */
   while ((zq_pp_state(&d->pp) & 3) != 1) zq_pp_write(&d->pp, zq_dec_decompress(&d->dec));
 
+  /* ZPAQL(II): decode a run of bytes, then hand the whole run to the
+   * postprocessor (one call into the PCOMP for all of them); see
+   * zq_d_fill(). */
   while (n) {
-    int c = zq_dec_decompress(&d->dec);
-    zq_pp_write(&d->pp, c);
-    if (c == -1) {
-      d->state = ZQ_SEGEND;
-      return 0;
+    zq_u8 tmp[4096];
+    int k;
+    const int lim = (n > 0 && n < (int)sizeof(tmp)) ? n : (int)sizeof(tmp);
+    const int c = zq_d_fill(d, tmp, lim, &k);
+    zq_pp_write_buf(&d->pp, tmp, k);
+    if (n > 0) n -= k;
+    if (k < lim) { /* stopped at c < 0 */
+      zq_pp_write(&d->pp, c);
+      if (c == -1) {
+        d->state = ZQ_SEGEND;
+        return 0;
+      }
+      if (n > 0) --n;
     }
-    if (n > 0) --n;
   }
   return 1;
 }

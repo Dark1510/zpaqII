@@ -98,12 +98,13 @@ int main() {
   printf(" * Do not edit by hand.  See config.c for how they are used. */\n");
   printf("#include \"zq_internal.h\"\n\n");
 
-  /* Level 1: 8 r-bit values x 2 e8e9 variants */
+  /* Level 1: 9 r-bit values (rb 0..8, block sizes up to 12; 7.15 cannot
+   * compile rb >= 9) x 2 e8e9 variants */
   printf("/* level 1 (variable length LZ77): [e8e9][rb] */\n");
-  printf("const char *const zq_tpl_l1[2][8] = {\n");
+  printf("const char *const zq_tpl_l1[2][9] = {\n");
   for (pre = 0; pre < 2; ++pre) {
     printf("  {\n");
-    for (rb = 0; rb < 8; ++rb) {
+    for (rb = 0; rb < 9; ++rb) {
       char method[128];
       /* block size 4+rb drives the r-bits; pre 1 or 5 selects e8e9 */
       snprintf(method, sizeof(method), "x%d.%d.5.0.3.22", 4 + rb, pre ? 5 : 1);

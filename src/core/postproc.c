@@ -20,6 +20,32 @@ void zq_pp_set_output(zq_postproc *pp, zq_writer *out) { pp->z.output = out; }
 void zq_pp_set_sha1(zq_postproc *pp, zq_sha1 *sha1) { pp->z.sha1 = sha1; }
 int zq_pp_state(const zq_postproc *pp) { return pp->state; }
 
+/* zq_pp_write() on buf[0..n-1], all of them >= 0.  In the data states the
+ * bytes go through in bulk: one zq_zpaql_run_buf() for a program, a copy into
+ * the output buffer for PASS.  Same result as n calls to zq_pp_write(). */
+void zq_pp_write_buf(zq_postproc *pp, const zq_u8 *buf, int n) {
+  if (pp->state == 5) {
+    zq_zpaql_run_buf(&pp->z, buf, n);
+  } else if (pp->state == 1) {
+    zq_zpaql *z = &pp->z;
+    while (n > 0) {
+      int k = (int)z->outbuf.n - z->bufptr;
+      if (k > n) k = n;
+      memcpy((zq_u8 *)z->outbuf.data + z->bufptr, buf, (size_t)k);
+      z->bufptr += k;
+      buf += k;
+      n -= k;
+      if (z->bufptr == (int)z->outbuf.n) zq_zpaql_flush(z);
+    }
+  } else {
+    while (n > 0 && pp->state != 5 && pp->state != 1) {
+      zq_pp_write(pp, *buf++);
+      --n;
+    }
+    if (n > 0) zq_pp_write_buf(pp, buf, n);
+  }
+}
+
 /* (PASS=0 | PROG=1 psize[0..1] pcomp[0..psize-1]) data... EOB=-1
  * Return state: 1=PASS, 2..4=loading PROG, 5=PROG loaded. */
 int zq_pp_write(zq_postproc *pp, int c) {

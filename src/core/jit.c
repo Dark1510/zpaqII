@@ -25,7 +25,10 @@
 #ifndef ZQ_NOJIT
 #include <sys/mman.h>
 
-/* Allocate/free executable memory (libzpaq::allocx). */
+/* Allocate/free JIT memory (libzpaq::allocx).  W^X: the pages are mapped
+ * PROT_READ|PROT_WRITE for the assembler and only become executable through
+ * zq_allocx_seal(), which also takes the write permission away.  Upstream maps
+ * them RWX for their whole life. */
 void zq_allocx(zq_u8 **p, int *n, int newsize) {
   if (*p || *n) {
     if (*p) munmap(*p, (size_t)*n);
@@ -33,7 +36,7 @@ void zq_allocx(zq_u8 **p, int *n, int newsize) {
     *n = 0;
   }
   if (newsize > 0) {
-    void *m = mmap(NULL, (size_t)newsize, PROT_READ | PROT_WRITE | PROT_EXEC,
+    void *m = mmap(NULL, (size_t)newsize, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m == MAP_FAILED) {
       *p = NULL;
@@ -44,6 +47,12 @@ void zq_allocx(zq_u8 **p, int *n, int newsize) {
       *n = newsize;
     }
   }
+}
+
+/* Make assembled code executable and read-only. */
+void zq_allocx_seal(zq_u8 *p, int n) {
+  if (p && n > 0 && mprotect(p, (size_t)n, PROT_READ | PROT_EXEC) != 0)
+    zq_error("allocx failed");
 }
 
 /* int flush1(ZPAQL* z): called by the generated code when outbuf is full. */
@@ -133,7 +142,7 @@ int zq_zpaql_assemble(zq_zpaql *z) {
   int *it;
   int done = 0;
   int o = 5;  /* reserve space for the jump to start */
-  int halt, outlabel, start, rsize;
+  int halt, hnext, hnext_jmp, outlabel, start, rsize;
   int i, j, l;
 
   b.code = z->rcode;
@@ -165,6 +174,29 @@ int zq_zpaql_assemble(zq_zpaql *z) {
   PUT1(0x5e);                  /* pop rsi */
   PUT1(0x5d);                  /* pop rbp */
   PUT1(0xc3);                  /* ret */
+
+  /* Code for HALT (ZPAQL(II) batching): while z->bn > 0, load the next input
+   * byte of the batch into a and run the program again from its first
+   * instruction, without going through the epilogue and the prologue.  The
+   * state between two inputs is exactly what HALT would have stored and the
+   * next call would have loaded, so this is the same machine.  Errors still
+   * go to the real HALT block above. */
+  hnext = o;
+  PUT2L(0x48b9, &z->bn);       /* mov rcx, &bn */
+  PUT2(0x8b01);                /* mov eax, [rcx] */
+  PUT2(0x85c0);                /* test eax, eax */
+  PUT2(0x0f84);                /* jz near halt (eax = 0) */
+  PUTA(halt - o - 4);
+  PUT2(0xffc8);                /* dec eax */
+  PUT2(0x8901);                /* mov [rcx], eax */
+  PUT2L(0x48b9, &z->bin);      /* mov rcx, &bin */
+  PUT3(0x488b01);              /* mov rax, [rcx] */
+  PUT3(0x0fb610);              /* movzx edx, byte [rax] */
+  PUT3(0x48ffc0);              /* inc rax */
+  PUT3(0x488901);              /* mov [rcx], rax */
+  PUT1(0xe9);                  /* jmp near <first instruction> */
+  hnext_jmp = o;
+  PUTA(0);                     /* filled in after the second pass */
 
   /* Code for OUT: store a=edx at outbuf[bufptr++], flush when full. */
   outlabel = o;
@@ -438,9 +470,8 @@ int zq_zpaql_assemble(zq_zpaql *z) {
           break;
         case 7:   /* special */
           switch (op) {
-            case 56:  /* halt */
-              PUT2(0x31c0);                    /* xor eax, eax */
-              PUT1A(0xe9, halt - o - 4);       /* jmp near halt */
+            case 56:  /* halt: next input of the batch, or return */
+              PUT1A(0xe9, hnext - o - 4);      /* jmp near hnext */
               break;
             case 57:  /* out */
               PUT1A(0xe8, outlabel - o - 4);   /* call outlabel */
@@ -629,6 +660,14 @@ int zq_zpaql_assemble(zq_zpaql *z) {
     }
   }
 
+  /* The batch loop re-enters at the first instruction. */
+  if (it[0] < 16) {
+    free(it);
+    return 0;
+  }
+  o = hnext_jmp;
+  PUTA(it[0] - (hnext_jmp + 4));
+
   /* Jump to the start of the generated function. */
   o = 0;
   PUT1A(0xe9, start - 5);
@@ -647,6 +686,11 @@ void zq_allocx(zq_u8 **p, int *n, int newsize) {
 int zq_zpaql_assemble(zq_zpaql *z) {
   (void)z;
   return 0;
+}
+
+void zq_allocx_seal(zq_u8 *p, int n) {
+  (void)p;
+  (void)n;
 }
 
 #endif

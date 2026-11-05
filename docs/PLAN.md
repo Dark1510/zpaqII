@@ -1107,3 +1107,32 @@ periodic text and random data.  All pass with the interpreter and with the JIT.
 
 `zdis` grew one fix along the way: the target of `lj` is relative to `hbegin`,
 like the interpreter computes it, not an absolute offset.
+
+## Phase B, part 1: W^X, batched runs, native fast paths
+
+`docs/ZPAQL.md` (§ Phase B) is the reference; in short:
+
+* **W^X**: both JIT code pages are RW while assembled and RX afterwards.
+* **Batched runs**: `zq_zpaql_run_buf()`; the JIT's `HALT` loads the next byte
+  of the batch and re-enters the program without the epilogue/prologue.  The
+  decompresser hands the postprocessor runs of up to 4 KB; a decoding error
+  part-way still feeds the bytes before it and re-raises the same error.
+* **Native fast paths** (`src/core/fastpath.c`) for the `lazy2`, `lzpre` and
+  `e8e9` postprocessors of 7.15's own methods, recognised by recompiling the
+  template with the parameters read from the bytecode and comparing it byte
+  for byte; `bwtrle` is recognised but still runs on the JIT.
+
+Extraction of 35 MB of text, CPU time: `-m1` −28 %, `-m2` −29 %, `-m3` −4 %.
+
+Found along the way and fixed:
+
+* `zq_tpl_l1` held level-1 templates for `rb` 0..7 only; block size 12
+  (`rb` 8, which 7.15 compiles) read past the table and took the wrong
+  template.  Regenerated with `tools/gen_config.cpp` for `rb` 0..8; `rb` ≥ 9
+  (rejected by 7.15's compiler) is an error (`docs/DEVIATIONS.md`).  The
+  archiver rejects block sizes above 11 in both, so archives never hit it.
+* `tests/cli.sh` corrupted a byte by writing `0xFF`, a no-op about once in 256
+  runs (the corpus has a random file); it now writes the complement.
+* `zpaql_dif`'s new batch checks found that a PCOMP fed random bytes can
+  legitimately run ~10^10 instructions (manifest config 23) or never halt
+  (inverse BWT at EOF): those run on real streams in `fastpath_dif` instead.

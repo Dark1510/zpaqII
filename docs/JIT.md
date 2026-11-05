@@ -48,12 +48,17 @@ written back in the HALT block, so the struct is the only observable state.
 
 1. `jmp start` at offset 0.
 2. HALT block: store the registers back, restore the callee-saved registers, `ret`.
+   The `HALT` instruction does not go there directly but to `hnext`
+   (ZPAQL(II) batching): while `z->bn > 0` it loads the next byte of the batch
+   (`z->bin`) into `a` and jumps back to the first instruction; otherwise it
+   falls into the HALT block.  Errors still go straight to the HALT block.
 3. OUT block (a local subroutine): `outbuf[bufptr++] = a`, and when the buffer
    fills, call `zq_jit_flush()` with the registers saved.
 4. `start`: save registers, load the state, then the translated program.
 5. A second pass patches every jump target.
 
-Code lives in an `mmap`ed RWX page (`zq_allocx`); it is freed whenever the
+Code lives in an `mmap`ed page (`zq_allocx`), RW while it is assembled and
+RX once `zq_allocx_seal` has run (W^X; upstream keeps it RWX); it is freed whenever the
 header or the h/m arrays change, because the generated code bakes in the
 addresses of `a…f`, `bufptr`, `h`, `m`, `r` and `outbuf`.
 

@@ -128,7 +128,10 @@ r=$?
 if [ "$r" = 0 ]; then ok; else bad "check healthy (rc $r)"; fi
 cp ck.zpaq ckbad.zpaq
 sz=$(stat -c%s ckbad.zpaq)
-printf '\377' | dd of=ckbad.zpaq bs=1 seek=$((sz / 3)) conv=notrunc status=none
+# flip the byte (writing a fixed 0xFF was a no-op when b.bin, which is random,
+# put 0xFF there: about 1 run in 256)
+v=$(od -An -tu1 -j $((sz / 3)) -N1 ckbad.zpaq)
+printf "\\$(printf %o $((255 - v)))" | dd of=ckbad.zpaq bs=1 seek=$((sz / 3)) conv=notrunc status=none
 "$P" check ckbad.zpaq >/dev/null 2>&1
 r=$?
 if [ "$r" != 0 ]; then ok; else bad "check corrupted archive (rc 0)"; fi

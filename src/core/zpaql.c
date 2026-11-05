@@ -14,6 +14,7 @@ void zq_zpaql_clear(zq_zpaql *z) {
   z->cend = z->hbegin = z->hend = 0;
   z->a = z->b = z->c = z->d = 0;
   z->f = z->pc = 0;
+  z->fast = 0;
   zq_arr_resize(&z->header, 0, 1);
   zq_arr_resize(&z->h, 0, 4);
   zq_arr_resize(&z->m, 0, 1);
@@ -103,6 +104,7 @@ void zq_zpaql_inith(zq_zpaql *z) {
 
 void zq_zpaql_initp(zq_zpaql *z) {
   zq_zpaql_init_sizes(z, ZQ_HDR(z, 4), ZQ_HDR(z, 5));
+  zq_fast_detect(z);
 }
 
 void zq_zpaql_init_sizes(zq_zpaql *z, int hbits, int mbits) {
@@ -162,6 +164,7 @@ void zq_zpaql_outc(zq_zpaql *z, int ch) {
 }
 
 void zq_zpaql_run(zq_zpaql *z, zq_u32 input) {
+  if (z->fast && zq_fast_run(z, NULL, 0, input)) return;
 #ifndef ZQ_NOJIT
   /* JIT path: compile once per program, then call the generated code.  When
    * no code is produced (or the target has no JIT, see zq_internal.h) the
@@ -177,11 +180,13 @@ void zq_zpaql_run(zq_zpaql *z, zq_u32 input) {
           zq_allocx(&z->rcode, &z->rcode_size, (n2 + 4095) & ~4095);
           zq_zpaql_assemble(z);
         }
+        zq_allocx_seal(z->rcode, z->rcode_size);
       }
     }
   }
   if (z->rcode) {
     z->a = input;
+    z->bn = 0;
     {
       zq_u32 rc = ((zq_u32 (*)(void))z->rcode)();
       if (rc == 1) zq_error("Bad ZPAQL opcode");
@@ -193,6 +198,34 @@ void zq_zpaql_run(zq_zpaql *z, zq_u32 input) {
   }
 #endif
   zq_zpaql_run_interp(z, input);
+}
+
+/* Run the program once per byte of buf.  With the JIT the whole batch is one
+ * call into the generated code (see hnext in jit.c). */
+void zq_zpaql_run_buf(zq_zpaql *z, const zq_u8 *buf, int n) {
+  if (n <= 0) return;
+  if (z->fast && zq_fast_run(z, buf, n, 0)) return;
+#ifndef ZQ_NOJIT
+  if (!z->rcode) {
+    zq_zpaql_run(z, buf[0]);
+    ++buf;
+    --n;
+  }
+  if (z->rcode && n > 0) {
+    zq_u32 rc;
+    z->a = buf[0];
+    z->bin = buf + 1;
+    z->bn = n - 1;
+    rc = ((zq_u32 (*)(void))z->rcode)();
+    z->bn = 0;
+    if (rc == 1) zq_error("Bad ZPAQL opcode");
+    if (rc == 2) zq_error("Out of memory");
+    if (rc == 3) zq_error("Write error");
+    if (rc != 0) zq_error("ZPAQL execution error");
+    return;
+  }
+#endif
+  while (n-- > 0) zq_zpaql_run_interp(z, *buf++);
 }
 
 static void zq_div(zq_u32 *a, zq_u32 x) { *a = x ? *a / x : 0; }

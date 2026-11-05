@@ -31,7 +31,7 @@ BUILD    := build$(if $(DEBUG),-debug,)$(if $(NOJIT),-nojit,)
 CORE_SRC := $(wildcard src/core/*.c)
 CORE_OBJ := $(patsubst src/core/%.c,$(BUILD)/obj/%.o,$(CORE_SRC))
 
-.PHONY: all lib test test-e1 test-sha1hw test-fragchain test-digest test-zpaqldif zdis cross win64 win32 oracle clean info
+.PHONY: all lib test test-e1 test-sha1hw test-fragchain test-digest test-zpaqldif test-fastpath zdis cross win64 win32 oracle clean info
 
 all: lib test
 
@@ -52,7 +52,7 @@ $(BUILD)/obj/%.o: src/core/%.c include/zq.h src/core/zq_internal.h
 
 # ---------------- tests ----------------
 
-test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c test-e18 test-e6d test-sha1hw test-fragchain test-digest
+test: test-e1 test-e2 test-e3 test-e4 test-e4b test-e5 test-e6a test-e6c test-e18 test-e6d test-sha1hw test-fragchain test-digest test-zpaqldif test-fastpath
 	@echo "== E1 (hash/AES/scrypt): OK =="
 	@echo "== E2 (ZPAQL VM + compiler): OK =="
 	@echo "== E3 (predictor + coder): OK =="
@@ -86,6 +86,14 @@ test-fragchain: $(BUILD)/fragchain
 $(BUILD)/fragchain: tests/unit/fragchain.c $(BUILD)/libzqcore.a
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
+
+# ZPAQL(II): native fast paths for 7.15's own PCOMPs vs the reference
+test-fastpath: $(BUILD)/fastpath_dif
+	@$(BUILD)/fastpath_dif
+
+$(BUILD)/fastpath_dif: tests/unit/fastpath_dif.c $(BUILD)/libzqcore.a
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Isrc/core $< $(BUILD)/libzqcore.a $(LDFLAGS) -o $@
 
 # ZPAQL(II): the new run loop against the one-step reference interpreter
 test-zpaqldif: $(BUILD)/zpaql_dif $(BUILD)/e2_manifest.txt

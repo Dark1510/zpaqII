@@ -38,7 +38,8 @@ partly done.
 | 2.3 configurable integrity (`-hash`, `check`, `-savelist`, `-checklist`) | ✅ done |
 | 2.4 external codecs (`-ma`) | ❌ discarded (ADR-006); the LZ4 work was removed from the tree |
 | ZPAQL(II) phase A: new interpreter loop | ✅ done (2.2× on `-m1`/`-m2` in interpreter-only builds) |
-| ZPAQL(II) phase B: JIT batching, superinstructions, compile cache, W^X | ⏳ not started |
+| ZPAQL(II) phase B: W^X, batched runs, native fast paths for `lazy2`/`lzpre`/`e8e9` | ✅ done (−28 % CPU extracting `-m1`/`-m2`) |
+| ZPAQL(II) phase B: native inverse BWT, superinstructions, compile cache | 🚧 **next** |
 
 ### Platforms
 
@@ -69,15 +70,13 @@ In the order it will be done.
 
 ### 1. ZPAQL(II) phase B: the engine
 
-* **JIT batching**: enter the generated code once per N input bytes instead of
-  once per byte; the prologue/epilogue currently costs more than short
-  programs.
+Done: W^X for both JITs, batched runs (one call into the JIT per 4 KB),
+native fast paths for the `lazy2`, `lzpre` and `e8e9` postprocessors
+(`docs/ZPAQL.md`).  Left:
+
+* **Native inverse BWT** (`bwtrle`, already recognised): `-m3` on text.
 * **Superinstructions** for common pairs in the JIT.
 * **Compile cache** keyed by the config, for archives with many blocks.
-* **W^X**: the generated code page is currently `PROT_READ|WRITE|EXEC`.
-* **Native fast paths for recognised PCOMPs**: the LZ77/BWT/E8E9
-  postprocessors that 7.15's own methods generate, fingerprinted and decoded
-  in C instead of the VM.
 
 ### 2. Platform loose ends
 
@@ -105,7 +104,8 @@ differences, experimental codecs, packaging.
 make test          # differential tests against the reference upstream
 make matrix        # full bit-exact matrix (add/extract, both directions)
 make test-e6d      # CLI option parity with upstream (tests/cli.sh)
-make test-zpaqldif # new interpreter loop vs the one-step reference
+make test-zpaqldif # new interpreter loop and batched JIT vs the one-step reference
+make test-fastpath # native fast paths vs the one-step reference and real blocks
 make cross         # Linux x64/i386/arm64 + mingw x64/x86
 ```
 

@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern const char *const zq_tpl_l1[2][8];
+extern const char *const zq_tpl_l1[2][9];
 extern const char *const zq_tpl_l2[2];
 extern const char *const zq_tpl_l3[2][2];
 extern const char *const zq_tpl_l0[2];
@@ -129,6 +129,9 @@ char *zq_make_config(const char *method_in, int args[9]) {
       break;
     case 1: {
       const int rb = args[0] > 4 ? args[0] - 4 : 0;
+      /* 7.15 generates the text for any rb but its compiler rejects rb >= 9
+       * ("a&= 511": number too high); the templates cover rb 0..8. */
+      if (rb > 8) zq_error("number too high");
       hdr_txt = "comp 9 16 0 $1+20 ";
       pcomp_txt = zq_tpl_l1[doe8][rb];
       break;

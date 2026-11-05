@@ -24,6 +24,14 @@ stdout, stderr) matches upstream, with three exceptions that cannot match:
 * `zpaq`'s release build hides the "Advanced options" part of the usage text
   (`#ifndef NDEBUG`), so the port prints the same short text.
 
+* `makeConfig` for a level-1 method with a block size above 12 (`x13,1`…,
+  r-bits above 8): 7.15 generates a config its own compiler then rejects
+  ("Config line N at X: number too high"); the port raises "number too high"
+  while generating it.  The archiver refuses such block sizes in both
+  ("blocksize must be 0..11"), so only the library sees this.  Block size 12
+  is generated exactly like 7.15 (until phase B it silently took the wrong
+  template).
+
 ## Fixed during the port (kept here as a record)
 
 These were real divergences found by differential testing and are now closed:

@@ -60,6 +60,10 @@ typedef struct zq_zpaql {
   int f, pc;
   zq_u8 *rcode;         /* JIT code (NULL when interpreting) */
   int rcode_size;
+  const zq_u8 *bin;     /* zq_zpaql_run_buf: inputs still to run ... */
+  int bn;               /* ... and how many (0 outside a batch) */
+  int fast;             /* native fast path for this PCOMP (fastpath.c), 0 = none */
+  int fparam, fe8;      /* its parameter and E8E9 flag */
 } zq_zpaql;
 
 /* Exact equivalents of Array::operator() (masked index) and
@@ -78,6 +82,14 @@ void zq_zpaql_initp(zq_zpaql *z);
 void zq_zpaql_init_sizes(zq_zpaql *z, int hbits, int mbits);
 double zq_zpaql_memory(zq_zpaql *z);
 void zq_zpaql_run(zq_zpaql *z, zq_u32 input);
+/* Same as zq_zpaql_run() on buf[0], buf[1], ... buf[n-1] in order. */
+void zq_zpaql_run_buf(zq_zpaql *z, const zq_u8 *buf, int n);
+/* fastpath.c: recognise a PCOMP of 7.15's own methods (sets z->fast), and run
+ * it natively on buf[0..n-1], or on input when buf is NULL.  zq_fast_run
+ * returns 0 when z has no native path. */
+void zq_fast_detect(zq_zpaql *z);
+int  zq_fast_run(zq_zpaql *z, const zq_u8 *buf, int n, zq_u32 input);
+extern _Thread_local int zq_fast_detected; /* recognitions, for the tests */
 int zq_zpaql_read(zq_zpaql *z, zq_reader *in);
 int zq_zpaql_write(zq_zpaql *z, zq_writer *out, int pp);
 void zq_zpaql_flush(zq_zpaql *z);
@@ -87,6 +99,7 @@ void zq_zpaql_run_interp(zq_zpaql *z, zq_u32 input);
 
 /* JIT: executable memory and code generation (see src/core/jit.c). */
 void zq_allocx(zq_u8 **p, int *n, int newsize);
+void zq_allocx_seal(zq_u8 *p, int n);  /* RW -> RX (W^X) */
 int  zq_zpaql_assemble(zq_zpaql *z);   /* one instruction; 0 after HALT */
 
 /* ------------------------------------------------------------------ */
@@ -255,6 +268,7 @@ void zq_pp_free(zq_postproc *pp);
 void zq_pp_set_output(zq_postproc *pp, zq_writer *out);
 void zq_pp_set_sha1(zq_postproc *pp, zq_sha1 *sha1);
 int  zq_pp_write(zq_postproc *pp, int c);
+void zq_pp_write_buf(zq_postproc *pp, const zq_u8 *buf, int n);
 int  zq_pp_state(const zq_postproc *pp);
 
 enum { ZQ_BLOCK, ZQ_FILENAME, ZQ_COMMENT, ZQ_DATA, ZQ_SEGEND };

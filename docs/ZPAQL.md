@@ -20,7 +20,8 @@ archives and the behaviour are zpaq 7.15's.
 |---|---|---|
 | interpreter | `zq_zpaql_run_interp()` in `src/core/zpaql.c` | one loop, state in locals, one dispatch per instruction |
 | one-step reference | `zq_zpaql_execute()` | the old per-instruction stepper, kept as the reference the differential test compares against |
-| JIT (x86-64) | `src/core/jit.c` | unchanged, `docs/JIT.md` |
+| JIT (x86-64) | `src/core/jit.c` | `docs/JIT.md`; phase B: W^X and batched runs |
+| native fast paths | `src/core/fastpath.c` | the PCOMPs of 7.15's own methods, in C |
 | tooling | `tools/zdis.c` | disassembler and static verifier |
 
 The interpreter keeps `a, b, c, d, f, pc` in C locals for the whole input byte
@@ -72,15 +73,91 @@ hand without it is guessing.
 * `make test`, `make matrix` and the fuzz suite exercise the new loop through
   real archives.
 
+## Phase B (in progress)
+
+### W^X
+
+Both JITs (ZPAQL and predictor) map their code page `PROT_READ|PROT_WRITE`
+while assembling and switch it to `PROT_READ|PROT_EXEC` with `mprotect`
+before the first call (`zq_allocx_seal`).  Upstream keeps the page RWX for its
+whole life.  Checked on a live extraction: no `rwx` mapping in
+`/proc/<pid>/maps`, the JIT pages are `r-x`.
+
+### Batched runs
+
+`zq_zpaql_run_buf(z, buf, n)` is `zq_zpaql_run()` on `buf[0..n-1]`.  With the
+JIT it is a single call into the generated code: `HALT` jumps to a small block
+(`hnext` in `jit.c`) that loads the next byte into `a` and jumps back to the
+first instruction, so the prologue and epilogue run once per batch instead of
+once per byte.  The machine between two inputs is exactly what `HALT` would
+have stored and the next call loaded.  Without the JIT it is the interpreter
+loop over the buffer.
+
+The decompresser decodes up to 4 KB, then hands the run to the postprocessor
+(`zq_pp_write_buf`): one `run_buf` for a PCOMP, one copy into the output buffer
+for a stored block.  If decoding fails part-way, the bytes decoded before the
+failure still reach the postprocessor first and the same error is raised
+again (`zq_d_fill`), so errors are reported exactly as before.  The
+compressor's verification pass uses `run_buf` too.
+
+### Native fast paths (`src/core/fastpath.c`)
+
+The postprocessors 7.15's own methods generate are fixed programs:
+
+| family | method | parameters | native |
+|---|---|---|---|
+| `lazy2` | level 1 LZ77 (variable-length codes) | E8E9, `rb` = args[0]−4 (0..8) | yes |
+| `lzpre` | level 2 LZ77 (byte-aligned) | E8E9, `$3` = args[2] (0..255) | yes |
+| `e8e9` | level 0 with E8E9 | — | yes |
+| `bwtrle` | level 3 inverse BWT | E8E9, block ≤ 16 MB or not | recognised, still runs on the JIT |
+
+When a block's PCOMP is loaded (`zq_zpaql_initp`), `zq_fast_detect()` reads the
+parameters from the bytecode, compiles the template again with them and
+compares the whole program byte for byte; only an exact match is run natively.
+Archives do not change and plain zpaq 7.15 still runs the ZPAQL.
+
+The native code is a line-by-line transcription of each program, quoted in the
+comments: the same operations on the same 32-bit `a, b, c, d`, the same R
+registers and the same masked M, so the machine after every input is the VM's.
+The only liberty is in how a match is copied (`fp_copy`): in runs that wrap
+neither index, with `memmove` when source and destination do not overlap
+within the run and byte by byte when they do (an LZ77 repeat), and the output
+written in bulk; the bytes are the same.  `ZPAQII_NOFASTPATH=1` disables it.
+
+### Measured
+
+Instructions executed (callgrind, deterministic) to extract 6 MB of text with
+one thread, and CPU time (user+sys) to extract 35 MB of text on one pinned
+core, median of 7 on a shared machine (so take it as ±10 %):
+
+| archive | phase A | batched | batched + native | CPU time 35 MB |
+|---|---|---|---|---|
+| `-m1` | 530 M | 447 M | **352 M** (−34 %) | 741 → 533 ms (−28 %) |
+| `-m2` | 507 M | 433 M | **334 M** (−34 %) | 385 → 272 ms (−29 %) |
+| `-m3` | 11 705 M | 11 276 M | 11 282 M (−4 %) | 7470 → 7152 ms (−4 %) |
+
+Under callgrind SHA-1 runs the portable code (no SHA-NI), so the absolute
+counts overstate it; the differences are the engine.  `-m3` is dominated by
+the context model, and its BWT postprocessor is not native yet.
+
+### Verification
+
+* `make test-zpaqldif` now also runs `zq_zpaql_run_buf` (JIT) against the
+  one-step reference with batches of random length, on the HCOMPs and on the
+  PCOMPs of 7.15's levels.  Like 7.15's JIT, ours does not store `f` when a
+  comparison only feeds the `jt`/`jf` right after it, so `f` (dead there) and
+  `pc` are not compared.
+* `make test-fastpath` (`tests/unit/fastpath_dif.c`): every parameter variant
+  is recognised and a one-byte change is rejected; native vs the one-step
+  reference on random input (state after each batch, M and H at the end, then
+  end of segment); and real blocks (text, and this executable for E8E9)
+  compressed with 7.15's method strings, extracted with and without the fast
+  path.  Six deliberate mutations of `fastpath.c` were each caught.
+* `make test`, `make matrix` and the fuzz suite go through the fast path by
+  default.
+
 ## Next
 
-In rough order of value:
-
-1. **Native fast paths for recognised PCOMPs**: fingerprint the bytecode of
-   the postprocessors 7.15's own methods generate (LZ77, BWT, E8E9), decode in
-   C, skip the VM.  Compatible: 7.15 still runs the ZPAQL.
-2. **JIT batching**: enter the generated code once per N bytes instead of once
-   per byte (the prologue/epilogue currently costs more than short programs).
-3. **Superinstructions** in the JIT for common pairs.
-4. **Compile cache** keyed by the config, for archives with many blocks.
-5. **W^X**: the generated code page is currently `PROT_READ|WRITE|EXEC`.
+1. **Native inverse BWT** (`bwtrle`, both traversals): `-m3` text.
+2. **Superinstructions** in the JIT for common pairs.
+3. **Compile cache** keyed by the config, for archives with many blocks.
