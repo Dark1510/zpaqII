@@ -50,3 +50,21 @@ upstream.
 - ZPAQL execution error texts differ ("Bad ZPAQL opcode" from the JIT vs "ZPAQL
   execution error" from the interpreter), but the exit code and the failure point
   match.
+
+## ADR-006 — No external codecs: only 7.15's `-m` methods
+
+**Decision (2026-11-04):** zpaqII compresses only with zpaq 7.15's own methods
+(`-m0`…`-m5` and their `x`/`s`/`i` forms).  There is no `-ma` switch and no
+external codec (LZ4, zstd, …) with a ZPAQL decoder per block.  Phase 2.4 of the
+roadmap is discarded.
+
+**Consequences:**
+- The LZ4 block codec (`src/core/lz4.c`), the LZ4 decoder written in ZPAQL
+  (`src/core/lz4_pcomp.c`), the `zq_lz4_*` API and `make test-lz4` /
+  `make test-lz4pcomp` were removed.  They remain in history: `8013660` (2.4a)
+  and `9f17034` (2.4b).
+- Reading is unaffected: an archive written by a fork with `-ma` carries its
+  decoder in the block, and zpaqII extracts it through the ZPAQL VM like 7.15
+  does.
+- Native fast paths for recognised PCOMPs stay on the ZPAQL(II) backlog, now
+  targeting the postprocessors 7.15's own methods generate.

@@ -59,7 +59,7 @@ make zdis
 It prints the HCOMP and PCOMP programs with their offsets and checks what can
 be checked statically: jumps inside the program, operand bytes that are
 actually there, invalid opcodes.  It exists because writing a ZPAQL decoder by
-hand without it is guessing (see phase 2.4).
+hand without it is guessing.
 
 ## Verification
 
@@ -76,8 +76,9 @@ hand without it is guessing (see phase 2.4).
 
 In rough order of value:
 
-1. **Native fast paths for recognised PCOMPs** (with 2.4): fingerprint the
-   bytecode, decode in C, skip the VM.  Compatible: 7.15 still runs the ZPAQL.
+1. **Native fast paths for recognised PCOMPs**: fingerprint the bytecode of
+   the postprocessors 7.15's own methods generate (LZ77, BWT, E8E9), decode in
+   C, skip the VM.  Compatible: 7.15 still runs the ZPAQL.
 2. **JIT batching**: enter the generated code once per N bytes instead of once
    per byte (the prologue/epilogue currently costs more than short programs).
 3. **Superinstructions** in the JIT for common pairs.

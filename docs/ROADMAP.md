@@ -9,7 +9,11 @@ Order is by value, not by size.  Every item must keep phase 1 guarantees:
 archives readable by plain zpaq 7.15 unless the item says otherwise, bit-exact
 output where it applies, and a differential test against the oracle.
 
-## 1. External codecs with a ZPAQL decoder per block
+## 1. External codecs with a ZPAQL decoder per block — DISCARDED
+
+> **Discarded on 2026-11-04 (ADR-006).**  zpaqII keeps only 7.15's own `-m`
+> methods; there is no `-ma`.  The section is kept as a record of what was
+> considered.
 
 The most valuable format-level idea (zpaq-std's `-ma:algo:N`): the block stores
 the compressed payload plus a *decoder written in ZPAQL inside the block*, so
@@ -108,7 +112,7 @@ green and a commit, as in phase 1):
 | 2.1 | 2 — parallel fragmenter + hardware SHA | pure speed, archive stays byte-identical, no format change: the safest first win |
 | 2.2 | 4 — exit codes + `-715` | small; the audit is useful now and `-715` becomes the safety net that lets the *default* behaviour evolve later (items 1 and 3) without losing 7.15 equivalence |
 | 2.3 | 3 — configurable integrity and verification | first format extension; needs the `VFILE`/attribute mechanism and the digest plumbing |
-| 2.4 | 1 — external codecs with a ZPAQL decoder per block | the biggest; it can reuse the ZPAQL emitter and the block-comment parsing from 2.3 |
+| ~~2.4~~ | 1 — external codecs with a ZPAQL decoder per block | **discarded** (ADR-006) |
 | 2.5 | 5 — optional platform extras | only on concrete demand |
 
 **Decision to take before 2.2:** whether our *default* stays 7.15-exact (with the
@@ -132,7 +136,6 @@ Consequences for the items above:
   `ZQ_NOJIT`, which is byte-exact.
 * **2.2 / 2.3**: new code goes through the same narrow interfaces; no POSIX
   calls outside `zqos`.
-* **2.4**: external codecs must be portable C (zstd and LZ4 both are).
 
 ## Out of scope (decided, not pending)
 

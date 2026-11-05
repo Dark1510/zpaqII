@@ -37,7 +37,6 @@ The idea for zpaqII came from this encode.su forum thread:
 | Hardware SHA-1 | ✅ x86 SHA-NI; ARMv8 pending |
 | Turbo fragmenter (`-turbo`) | ✅ |
 | Digests (`-hash`, `check`) | ✅ |
-| LZ4 codec | 🚧 codec and ZPAQL decoder done; block framing pending (2.4b) |
 | Linux x86-64 / arm64 | ✅ CI |
 | Windows x64 | ✅ tested in Win7 and Win10 VMs |
 | Windows x86 host | ⏳ needs FPC on Windows |

@@ -1001,6 +1001,11 @@ other-tool-generated list works.
 
 # Phase 2.4: external codecs with a ZPAQL decoder per block
 
+> **Discarded on 2026-11-04 (ADR-006).**  zpaqII keeps only 7.15's own `-m`
+> methods.  The LZ4 codec, its ZPAQL decoder and their tests were removed from
+> the tree; they remain in history (`8013660` 2.4a, `9f17034` 2.4b).  The log
+> below is kept as a record.
+
 The design (from `ROADMAP.md` and zpaq-std's `-ma:algo:N`): a block stores the
 payload compressed by a native codec **and** a decoder written in ZPAQL inside
 the block, so plain zpaq 7.15 can still extract it — only slower, running the

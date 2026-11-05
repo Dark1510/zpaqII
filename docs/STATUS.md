@@ -16,11 +16,11 @@ new engine.  The name is documentation only; the bytecode and the archives are
 1. **Default behaviour is 7.15-exact**: archives, extracted files, exit codes,
    console output and speed.  Where 7.15 has a quirk, the quirk is reproduced,
    not fixed.
-2. **Improvements are opt-in** (`-strict`, `-turbo`, `-hash`, `-ma:...`), and
+2. **Improvements are opt-in** (`-strict`, `-turbo`, `-hash`), and
    `-715` puts everything back to 7.15 regardless of argument order.
-3. **Anything we write, plain zpaq 7.15 can read.**  That is why an external
-   codec ships a decoder written in ZPAQL inside the block instead of requiring
-   a plugin.
+3. **Anything we write, plain zpaq 7.15 can read.**  The compression methods
+   are 7.15's own `-m0`…`-m5` (and their `x`/`s`/`i` forms); there are no
+   external codecs (`-ma`), see `docs/DECISIONS.md` ADR-006.
 4. **The oracle is the upstream binary**, plus harnesses that instrument it —
    never the prose specification.
 
@@ -36,9 +36,7 @@ partly done.
 | 2.1 parallel fragmenter (`-turbo`) and hardware SHA-1 (SHA-NI) | ✅ done; ARMv8 SHA-1 still uses the portable path |
 | 2.2 exit-code hygiene (`-strict`) and `-715` | ✅ done |
 | 2.3 configurable integrity (`-hash`, `check`, `-savelist`, `-checklist`) | ✅ done |
-| 2.4a LZ4 block codec, interoperable with liblz4 both ways | ✅ done |
-| 2.4b LZ4 decoder written in ZPAQL | ✅ done (`src/core/lz4_pcomp.c`) |
-| 2.4b block framing, `-ma:lz4[:N]`, native fast path | 🚧 **next** |
+| 2.4 external codecs (`-ma`) | ❌ discarded (ADR-006); the LZ4 work was removed from the tree |
 | ZPAQL(II) phase A: new interpreter loop | ✅ done (2.2× on `-m1`/`-m2` in interpreter-only builds) |
 | ZPAQL(II) phase B: JIT batching, superinstructions, compile cache, W^X | ⏳ not started |
 
@@ -69,25 +67,7 @@ writing anything to disk.
 
 In the order it will be done.
 
-### 1. 2.4b: finish external codecs (LZ4 first)
-
-The decoder exists and is tested; what is missing is the plumbing.
-
-* **Block framing**: write `comp 0 0 ph pm n` blocks whose payload is the LZ4
-  block and whose PCOMP is `zq_lz4_pcomp_program()`, in the layout
-  `findBlock`/`findFilename`/`readComment` expect.
-* **Option**: `-ma:lz4[:N]` (block size `N`), rejected by `-715`.
-* **Native fast path**: recognise the block's PCOMP (a fingerprint, not the
-  comment) and decode with `zq_lz4_decompress()` instead of running the VM, so
-  zpaqII extracts its own LZ4 blocks at native speed.
-* **Acceptance**: an archive we write extracts identically with **plain zpaq
-  7.15**, with zpaqII (fast path) and with zpaqII forced through the VM; the
-  bytes match the original file.  Also keep the existing guarantee that
-  archives written by zpaq-std extract byte for byte with our port.
-* Then the same shape for a second codec (zstd is the obvious one) if the LZ4
-  path proves the design.
-
-### 2. ZPAQL(II) phase B: the engine
+### 1. ZPAQL(II) phase B: the engine
 
 * **JIT batching**: enter the generated code once per N input bytes instead of
   once per byte; the prologue/epilogue currently costs more than short
@@ -95,9 +75,11 @@ The decoder exists and is tested; what is missing is the plumbing.
 * **Superinstructions** for common pairs in the JIT.
 * **Compile cache** keyed by the config, for archives with many blocks.
 * **W^X**: the generated code page is currently `PROT_READ|WRITE|EXEC`.
-* **Native fast paths for recognised PCOMPs** (goes with 2.4).
+* **Native fast paths for recognised PCOMPs**: the LZ77/BWT/E8E9
+  postprocessors that 7.15's own methods generate, fingerprinted and decoded
+  in C instead of the VM.
 
-### 3. Platform loose ends
+### 2. Platform loose ends
 
 * ARMv8 SHA-1 block function (detection exists, the portable path is used).
 * Windows **x86** host build (needs FPC on Windows).
@@ -105,7 +87,7 @@ The decoder exists and is tested; what is missing is the plumbing.
 * Compare bit-exactly against an upstream **built on Windows**; today only
   functional compatibility in both directions is verified.
 
-### 4. 2.5: optional platform extras
+### 3. 2.5: optional platform extras
 
 Only on concrete demand: sector-level imaging, Windows ACLs/ADS/long paths,
 ZFS integration, an authenticated outer container, remote transports.
@@ -124,7 +106,6 @@ make test          # differential tests against the reference upstream
 make matrix        # full bit-exact matrix (add/extract, both directions)
 make test-e6d      # CLI option parity with upstream (tests/cli.sh)
 make test-zpaqldif # new interpreter loop vs the one-step reference
-make test-lz4pcomp # the LZ4 decoder in ZPAQL, run by the real postprocessor
 make cross         # Linux x64/i386/arm64 + mingw x64/x86
 ```
 

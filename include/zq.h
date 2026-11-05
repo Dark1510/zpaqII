@@ -151,16 +151,6 @@ double      zq_sha1_size(const zq_sha1 *s);
 zq_u64      zq_sha1_usize(const zq_sha1 *s);
 
 /* ------------------------------------------------------------------ */
-/* LZ4 block format (phase 2.4)                                        */
-/* ------------------------------------------------------------------ */
-
-/* Compress src[0..n) into dst[0..cap); the result is a standard LZ4 block.
- * Returns the size, or -1 if it does not fit. */
-int zq_lz4_compress(const void *src, size_t n, void *dst, size_t cap);
-/* Decompress a standard LZ4 block. Returns the size, or -1 on bad input. */
-int zq_lz4_decompress(const void *src, size_t n, void *dst, size_t cap);
-
-/* ------------------------------------------------------------------ */
 /* Extra digests (phase 2.3 integrity lists)                           */
 /* ------------------------------------------------------------------ */
 
