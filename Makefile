@@ -25,7 +25,7 @@ CFLAGS := -std=c11 -O0 -g -fsanitize=address,undefined -Wall -Wextra -Wshadow -I
 LDFLAGS += -fsanitize=address,undefined
 endif
 
-UPSTREAM ?= /mnt/IA_LAB/agentes/zpaqII/upstream-zpaq
+UPSTREAM ?= include
 BUILD    := build$(if $(DEBUG),-debug,)$(if $(NOJIT),-nojit,)
 
 CORE_SRC := $(wildcard src/core/*.c)
