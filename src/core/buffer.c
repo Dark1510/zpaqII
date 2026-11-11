@@ -1,6 +1,6 @@
 /* zpaqII - in-memory buffer (libzpaq::StringBuffer) and adapters.
  * Port of libzpaq 7.15 (Unlicense, Matt Mahoney). */
-#include "zq.h"
+#include "../../include/zq.h"
 
 #include <stdlib.h>
 #include <string.h>

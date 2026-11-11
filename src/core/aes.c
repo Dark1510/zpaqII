@@ -1,7 +1,7 @@
 /* zpaqII - AES-256-CTR, scrypt/stretchKey and random.
  * Port of libzpaq 7.15 (Unlicense, Matt Mahoney).  AES derives from
  * libtomcrypt 1.17 (public domain); scrypt/Salsa20/8 from cr.yp.to. */
-#include "zq.h"
+#include "../../include/zq.h"
 
 #include <stdio.h>
 #include <string.h>

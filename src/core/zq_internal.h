@@ -7,7 +7,7 @@
 #ifndef ZPAQII_ZQ_INTERNAL_H
 #define ZPAQII_ZQ_INTERNAL_H 1
 
-#include "zq.h"
+#include "../../include/zq.h"
 
 /* ------------------------------------------------------------------ */
 /* Target capabilities                                                 */

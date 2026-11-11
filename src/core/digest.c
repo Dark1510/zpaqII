@@ -5,7 +5,7 @@
  * is read, and both are portable C: no tables generated at run time, no
  * endianness assumptions, no unaligned reads.
  */
-#include "zq.h"
+#include "../../include/zq.h"
 
 #include <string.h>
 

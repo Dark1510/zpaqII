@@ -11,7 +11,7 @@
  * produces exactly the same cuts (and the same `hits` and `o1` table that the
  * block heuristics use) several times faster.
  */
-#include "zq.h"
+#include "../../include/zq.h"
 
 #include <string.h>
 

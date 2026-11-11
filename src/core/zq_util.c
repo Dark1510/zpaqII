@@ -1,6 +1,6 @@
 /* zpaqII - core base utilities: errors, aligned memory, streams.
  * Literal port of libzpaq 7.15 (Unlicense, Matt Mahoney). */
-#include "zq.h"
+#include "../../include/zq.h"
 
 #include <setjmp.h>
 #include <stdio.h>
